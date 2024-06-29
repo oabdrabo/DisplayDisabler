@@ -3,6 +3,15 @@
 .AppleDouble
 .LSOverride
 
+# Build artifacts
+*.o
+*.d
+DisplayDisabler
+DisplayDisabler.app/
+
+# Old CLI binary
+display_disable
+
 # Logs
 *.log
 
@@ -10,9 +19,6 @@
 *.tmp
 *.swp
 *~
-
-# Compiled binaries (optional - you may want to include the binary)
-# display_disable
 
 # IDE
 .vscode/
