@@ -96,11 +96,14 @@ typedef void (^DisplayChangeBlock)(void);
 - (BOOL)enableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
-// HiDPI forcing (macOS 14+ only — uses CGVirtualDisplay)
+// HiDPI
+- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
+- (BOOL)switchToHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
+
+// HiDPI forcing via CGVirtualDisplay (macOS 14+, for displays without native HiDPI)
 - (BOOL)forceHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)isHiDPIForcedForDisplay:(CGDirectDisplayID)displayID;
-- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
 - (void)cleanUpAllVirtualDisplays;
 - (void)pruneStaleVirtualDisplays;
 

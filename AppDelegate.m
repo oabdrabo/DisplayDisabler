@@ -115,7 +115,10 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
     NSUInteger activeCount = 0;
-    for (DDDisplayInfo *d in displays) { if (d.isActive) activeCount++; }
+    for (DDDisplayInfo *d in displays) {
+        if (d.isActive || [self.displayManager isHiDPIForcedForDisplay:d.displayID])
+            activeCount++;
+    }
 
     // Header
     [self addItemToMenu:menu
@@ -155,7 +158,8 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
 
 - (void)addDisplaySection:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
     // Display name with status indicator
-    NSString *dot = display.isActive ? @"\u25CF " : @"\u25CB ";
+    BOOL effectivelyActive = display.isActive || [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+    NSString *dot = effectivelyActive ? @"\u25CF " : @"\u25CB ";
     NSString *title = [NSString stringWithFormat:@"%@%@ \u2014 0x%X",
                        dot, display.name, display.displayID];
 
@@ -168,9 +172,14 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
     nameItem.attributedTitle = attrTitle;
     [menu addItem:nameItem];
 
+    BOOL hiDPIForced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+
     // Tags line
     NSMutableArray *tags = [NSMutableArray array];
-    [tags addObject:display.isActive ? @"active" : @"disabled"];
+    if (hiDPIForced)
+        [tags addObject:@"HiDPI forced"];
+    else
+        [tags addObject:display.isActive ? @"active" : @"disabled"];
     if (display.isBuiltIn) [tags addObject:@"built-in"];
     if (display.isMain) [tags addObject:@"main"];
 
@@ -179,7 +188,19 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
                          [tags componentsJoinedByString:@"  \u2502  "]]
                  action:nil enabled:NO];
 
-    if (display.isActive) {
+    if (hiDPIForced) {
+        // Display is mirroring a virtual HiDPI display — show forced status
+        [self addItemToMenu:menu
+                      title:@"    \u26A1 HiDPI via virtual display mirroring"
+                     action:nil enabled:NO];
+        NSMenuItem *stopItem = [[NSMenuItem alloc]
+            initWithTitle:@"    Stop Forced HiDPI"
+                   action:@selector(stopForcedHiDPI:)
+            keyEquivalent:@""];
+        stopItem.target = self;
+        stopItem.tag = (NSInteger)display.displayID;
+        [menu addItem:stopItem];
+    } else if (display.isActive) {
         // Resolution line
         NSString *resStr;
         if (display.isHiDPI && display.logicalWidth > 0) {
@@ -204,20 +225,16 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
             [menu addItem:modesItem];
         }
 
-        // Force HiDPI (only for displays without native HiDPI modes)
-        BOOL hiDPIForced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
-        if (hiDPIForced) {
-            [self addItemToMenu:menu
-                          title:@"    \u26A1 HiDPI forced (via virtual display)"
-                         action:nil enabled:NO];
-            NSMenuItem *stopItem = [[NSMenuItem alloc]
-                initWithTitle:@"    Stop Forced HiDPI"
-                       action:@selector(stopForcedHiDPI:)
+        // HiDPI option: native switch if available, virtual display if not
+        if (!display.isHiDPI && display.hasNativeHiDPIModes) {
+            NSMenuItem *switchItem = [[NSMenuItem alloc]
+                initWithTitle:@"    Switch to HiDPI"
+                       action:@selector(switchToHiDPI:)
                 keyEquivalent:@""];
-            stopItem.target = self;
-            stopItem.tag = (NSInteger)display.displayID;
-            [menu addItem:stopItem];
-        } else if (!display.hasNativeHiDPIModes &&
+            switchItem.target = self;
+            switchItem.tag = (NSInteger)display.displayID;
+            [menu addItem:switchItem];
+        } else if (!display.isHiDPI && !display.hasNativeHiDPIModes &&
                    NSClassFromString(@"CGVirtualDisplay")) {
             NSMenuItem *forceItem = [[NSMenuItem alloc]
                 initWithTitle:@"    Force HiDPI"
@@ -485,6 +502,21 @@ static const CGFloat kSwitchRowPad    = 18;
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
+                          body:error.localizedDescription ?: @"Unknown error"];
+    }
+}
+
+- (void)switchToHiDPI:(NSMenuItem *)sender {
+    CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    NSError *error = nil;
+    if ([self.displayManager switchToHiDPIForDisplay:did error:&error]) {
+        [self postNotification:@"Switched to HiDPI"
+                          body:[NSString stringWithFormat:@"%@ is now in HiDPI mode.", name]];
+    } else {
+        NSLog(@"DisplayDisabler: Failed to switch to HiDPI for 0x%X: %@", did, error);
+        [self postNotification:@"HiDPI Switch Failed"
                           body:error.localizedDescription ?: @"Unknown error"];
     }
 }
