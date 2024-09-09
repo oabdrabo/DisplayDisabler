@@ -6,43 +6,10 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
-// Private API declarations
+// Private API — CGSConfigureDisplayEnabled
 extern CGError CGSConfigureDisplayEnabled(CGDisplayConfigRef config,
                                           CGDirectDisplayID display,
                                           bool enabled);
-
-// ── CGVirtualDisplay private API (macOS 14+, resolved at runtime) ───────────
-
-@interface CGVirtualDisplayMode : NSObject
-- (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height refreshRate:(double)refreshRate;
-@end
-
-@interface CGVirtualDisplayDescriptor : NSObject
-@property (nonatomic, copy) NSString *name;
-@property (nonatomic) NSUInteger maxPixelsWide;
-@property (nonatomic) NSUInteger maxPixelsHigh;
-@property (nonatomic) CGSize sizeInMillimeters;
-@property (nonatomic, strong) dispatch_queue_t queue;
-@property (nonatomic, copy) void (^terminationHandler)(id display, id error);
-@property (nonatomic) NSUInteger vendorID;
-@property (nonatomic) NSUInteger productID;
-@property (nonatomic) NSUInteger serialNum;
-@property (nonatomic) CGPoint redPrimary;
-@property (nonatomic) CGPoint greenPrimary;
-@property (nonatomic) CGPoint bluePrimary;
-@property (nonatomic) CGPoint whitePoint;
-@end
-
-@interface CGVirtualDisplaySettings : NSObject
-@property (nonatomic) unsigned int hiDPI;
-@property (nonatomic, copy) NSArray *modes;
-@end
-
-@interface CGVirtualDisplay : NSObject
-- (instancetype)initWithDescriptor:(CGVirtualDisplayDescriptor *)descriptor;
-- (BOOL)applySettings:(CGVirtualDisplaySettings *)settings;
-@property (nonatomic, readonly) CGDirectDisplayID displayID;
-@end
 
 // ── Display info model ──────────────────────────────────────────────────────
 
@@ -101,7 +68,8 @@ typedef void (^DisplayChangeBlock)(void);
 - (BOOL)switchToHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
 // HiDPI forcing via CGVirtualDisplay (macOS 14+, for displays without native HiDPI)
-- (BOOL)forceHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
+- (void)forceHiDPIForDisplay:(CGDirectDisplayID)displayID
+                  completion:(void (^)(BOOL success, NSError *error))completion;
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)isHiDPIForcedForDisplay:(CGDirectDisplayID)displayID;
 - (void)cleanUpAllVirtualDisplays;

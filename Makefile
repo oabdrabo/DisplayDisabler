@@ -7,7 +7,8 @@ APP_NAME   = DisplayDisabler
 BUNDLE     = $(APP_NAME).app
 
 CC         = clang
-CFLAGS     = -fobjc-arc -Wall -O2 -mmacosx-version-min=13.0 -MMD -MP
+CFLAGS     = -fobjc-arc -Wall -Wextra -O2 -fstack-protector-strong \
+             -mmacosx-version-min=13.0 -MMD -MP
 FRAMEWORKS = -framework Cocoa -framework CoreGraphics -framework IOKit \
              -framework ServiceManagement -framework UserNotifications
 SOURCES    = main.m AppDelegate.m DisplayManager.m

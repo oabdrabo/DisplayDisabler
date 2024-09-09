@@ -33,7 +33,7 @@ No dock icon. No terminal. No scripts. Just a clean menu bar utility.
 
 ```
 DisplayDisabler v3.0
-1 online, 1 active
+1 connected, 1 active
 ─────────────────────────────────────────────
 ● Built-in Display — 0x1
   active  │  built-in  │  main
@@ -68,7 +68,8 @@ make uninstall  # remove from /Applications
 ### Compilation details
 
 ```bash
-clang -fobjc-arc -Wall -O2 -mmacosx-version-min=13.0 \
+clang -fobjc-arc -Wall -Wextra -O2 -fstack-protector-strong \
+      -mmacosx-version-min=13.0 \
       -framework Cocoa -framework CoreGraphics -framework IOKit \
       -framework ServiceManagement -framework UserNotifications \
       main.m AppDelegate.m DisplayManager.m -o DisplayDisabler
@@ -81,7 +82,7 @@ The core functionality uses Apple's private CoreGraphics API:
 ```objc
 CGBeginDisplayConfiguration(&config);
 CGSConfigureDisplayEnabled(config, displayID, false);  // private API
-CGCompleteDisplayConfiguration(config, kCGConfigurePermanently);
+CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
 ```
 
 This is exactly what BetterDisplay does internally.
@@ -134,5 +135,5 @@ MIT License — see [LICENSE](LICENSE)
 
 ---
 
-**Version**: 3.0.0
+**Version**: 3.0
 **Compatible with**: macOS 13+ (Ventura and later), Apple Silicon & Intel
