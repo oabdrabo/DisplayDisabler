@@ -10,8 +10,9 @@ CC         = clang
 CFLAGS     = -fobjc-arc -Wall -Wextra -O2 -fstack-protector-strong \
              -mmacosx-version-min=13.0 -MMD -MP
 FRAMEWORKS = -framework Cocoa -framework CoreGraphics -framework IOKit \
-             -framework ServiceManagement -framework UserNotifications
-SOURCES    = main.m AppDelegate.m DisplayManager.m
+             -framework ServiceManagement -framework UserNotifications \
+             -framework CoreDisplay
+SOURCES    = main.m AppDelegate.m DisplayManager.m DDC.m
 OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
@@ -37,7 +38,8 @@ bundle: $(EXECUTABLE)
 	@echo "Built $(BUNDLE)"
 
 sign: bundle
-	@codesign --force --sign - --deep "$(BUNDLE)" 2>/dev/null
+	@codesign --force --sign - "$(BUNDLE)/Contents/MacOS/$(EXECUTABLE)"
+	@codesign --force --sign - "$(BUNDLE)"
 	@echo "Signed $(BUNDLE) (ad-hoc)"
 
 install: all
