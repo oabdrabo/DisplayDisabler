@@ -6,6 +6,7 @@
 #import "AppDelegate.h"
 #import "DisplayManager.h"
 #import "Brightness.h"
+#import "HiDPIInjector.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 
@@ -409,6 +410,20 @@ static const size_t kCommonHiDPICount =
         brightItem.submenu = [self buildBrightnessSubmenuForDisplay:display.displayID];
         [menu addItem:brightItem];
     }
+
+    // "Crisp" system-level HiDPI: writes a display override plist that adds
+    // custom resolutions to macOS's own mode list. Requires admin + reboot.
+    // After reboot, these appear as native HiDPI modes in All Resolutions
+    // and in System Settings → Displays.
+    BOOL installed = [[HiDPIInjector shared] isInstalledForDisplay:display.displayID];
+    [self addActionToMenu:menu
+                    title:(installed
+                           ? @"Remove Crisp HiDPI Overrides\u2026"
+                           : @"Install Crisp HiDPI (admin + reboot)\u2026")
+                   action:(installed
+                           ? @selector(uninstallCrispHiDPI:)
+                           : @selector(installCrispHiDPI:))
+                displayID:display.displayID];
 
     [self addActionToMenu:menu title:@"Disable This Display"
                    action:@selector(disableDisplay:) displayID:display.displayID];
@@ -923,6 +938,104 @@ static const size_t kCommonHiDPICount =
         [self postNotification:@"Brightness Failed"
                           body:error.localizedDescription];
     }
+}
+
+- (void)installCrispHiDPI:(NSMenuItem *)sender {
+    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    NSArray<NSValue *> *presets = [[HiDPIInjector shared] defaultCustomResolutions];
+
+    NSMutableString *list = [NSMutableString string];
+    for (NSValue *v in presets) {
+        NSSize s = v.sizeValue;
+        [list appendFormat:@"  • %d × %d\n", (int)s.width, (int)s.height];
+    }
+
+    if (@available(macOS 14.0, *)) { [NSApp activate]; }
+    else { [NSApp activateIgnoringOtherApps:YES]; }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:
+        @"Install crisp HiDPI on \"%@\"?", name];
+    alert.informativeText = [NSString stringWithFormat:
+        @"Writes /Library/Displays/…/DisplayVendorID-%x/DisplayProductID-%x "
+        @"with these logical resolutions as native HiDPI modes:\n\n%@\n"
+        @"Requires your admin password and a reboot to activate. You can undo "
+        @"via the same menu afterwards.",
+        CGDisplayVendorNumber(did), CGDisplayModelNumber(did), list];
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"Install"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+
+    __weak __typeof(self) weakSelf = self;
+    [[HiDPIInjector shared] installForDisplay:did resolutions:presets
+                                   completion:^(BOOL ok, NSError *err) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!ok) {
+            NSLog(@"DisplayDisabler: HiDPI install failed: %@", err);
+            [strongSelf postNotification:@"Install Failed"
+                                    body:err.localizedDescription];
+            return;
+        }
+        [strongSelf rebuildMenu];
+        [strongSelf offerRebootWithMessage:
+            [NSString stringWithFormat:
+             @"Crisp HiDPI overrides installed for \"%@\".", name]];
+    }];
+}
+
+- (void)uninstallCrispHiDPI:(NSMenuItem *)sender {
+    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    if (![self confirmDestructive:[NSString stringWithFormat:
+                                   @"Remove crisp HiDPI overrides for \"%@\"?", name]
+                             info:@"Requires admin password. A reboot is needed "
+                                  @"to fully revert to macOS defaults."
+                       actionName:@"Remove"]) {
+        return;
+    }
+
+    __weak __typeof(self) weakSelf = self;
+    [[HiDPIInjector shared] uninstallForDisplay:did
+                                     completion:^(BOOL ok, NSError *err) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!ok) {
+            NSLog(@"DisplayDisabler: HiDPI uninstall failed: %@", err);
+            [strongSelf postNotification:@"Remove Failed"
+                                    body:err.localizedDescription];
+            return;
+        }
+        [strongSelf rebuildMenu];
+        [strongSelf offerRebootWithMessage:
+            [NSString stringWithFormat:
+             @"Crisp HiDPI overrides removed for \"%@\".", name]];
+    }];
+}
+
+- (void)offerRebootWithMessage:(NSString *)message {
+    if (@available(macOS 14.0, *)) { [NSApp activate]; }
+    else { [NSApp activateIgnoringOtherApps:YES]; }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = message;
+    alert.informativeText = @"The change applies only after a reboot. Would you "
+                             @"like to restart now?";
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"Restart Now"];
+    [alert addButtonWithTitle:@"Later"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+
+    // Trigger the standard macOS restart via AppleScript (no admin needed).
+    NSAppleScript *as = [[NSAppleScript alloc] initWithSource:
+        @"tell application \"System Events\" to restart"];
+    NSDictionary *asErr = nil;
+    [as executeAndReturnError:&asErr];
+    if (asErr) NSLog(@"DisplayDisabler: restart script error: %@", asErr);
 }
 
 // ── Settings actions ────────────────────────────────────────────────────────
