@@ -16,7 +16,6 @@ static NSString * const kAutoManage        = @"AutoManageBuiltIn";
 static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
-static NSString * const kHideNotch         = @"HideNotch";
 
 // Notification identifier used for auto-manage events so consecutive
 // disable/re-enable banners replace each other instead of stacking.
@@ -61,9 +60,6 @@ static const size_t kCommonHiDPICount =
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
 @property (nonatomic) BOOL notificationAuthRequested;
-// Black strip covering the notch region of the MacBook's built-in display.
-// Created lazily; nil when the pref is off or no notched display is attached.
-@property (nonatomic, strong) NSWindow *notchOverlay;
 @end
 
 @implementation AppDelegate
@@ -80,7 +76,6 @@ static const size_t kCommonHiDPICount =
 
     [self setupStatusItem];
     [self rebuildMenu];
-    [self updateNotchOverlay];
 
     __weak __typeof(self) weakSelf = self;
     [self.displayManager startMonitoringWithChangeHandler:^{
@@ -89,7 +84,6 @@ static const size_t kCommonHiDPICount =
         [strongSelf.displayManager pruneStaleVirtualDisplays];
         [[Brightness shared] invalidateServiceCache];
         [strongSelf rebuildMenu];
-        [strongSelf updateNotchOverlay];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
     }];
@@ -103,7 +97,6 @@ static const size_t kCommonHiDPICount =
     (void)notification;
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
-    [self tearDownNotchOverlay];
 }
 
 - (void)registerDefaults {
@@ -112,7 +105,6 @@ static const size_t kCommonHiDPICount =
         kShowNotifications: @YES,
         kConfirmDisable:    @YES,
         kShowResolutions:   @YES,
-        kHideNotch:         @NO,
     }];
 }
 
@@ -179,67 +171,6 @@ static const size_t kCommonHiDPICount =
                                accessibilityDescription:@"DisplayDisabler"];
     [icon setTemplate:YES];
     self.statusItem.button.image = icon;
-}
-
-// ── Notch overlay ───────────────────────────────────────────────────────────
-
-// Screen whose built-in panel has a camera notch, else nil. Detected via
-// NSScreen.safeAreaInsets.top > 0 — non-zero only on notched MacBooks.
-- (NSScreen *)notchedScreen {
-    if (@available(macOS 12.0, *)) {
-        for (NSScreen *s in [NSScreen screens]) {
-            if (s.safeAreaInsets.top > 0) return s;
-        }
-    }
-    return nil;
-}
-
-- (void)updateNotchOverlay {
-    BOOL wantsOverlay = [self pref:kHideNotch];
-    NSScreen *screen = [self notchedScreen];
-
-    if (!wantsOverlay || !screen) {
-        [self tearDownNotchOverlay];
-        return;
-    }
-
-    CGFloat notchHeight = 0;
-    if (@available(macOS 12.0, *)) notchHeight = screen.safeAreaInsets.top;
-    if (notchHeight <= 0) { [self tearDownNotchOverlay]; return; }
-
-    // Cocoa windows are bottom-left-origin; place our strip flush with the
-    // top of the target screen, full width, notch-height tall.
-    NSRect frame = NSMakeRect(screen.frame.origin.x,
-                              screen.frame.origin.y + screen.frame.size.height - notchHeight,
-                              screen.frame.size.width,
-                              notchHeight);
-
-    if (!self.notchOverlay) {
-        NSWindow *w = [[NSWindow alloc] initWithContentRect:frame
-                                                  styleMask:NSWindowStyleMaskBorderless
-                                                    backing:NSBackingStoreBuffered
-                                                      defer:NO];
-        w.backgroundColor = [NSColor blackColor];
-        w.opaque = YES;
-        w.hasShadow = NO;
-        // Above the menubar so it sits on top of the notch cutout.
-        w.level = NSStatusWindowLevel + 1;
-        w.ignoresMouseEvents = YES;
-        w.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                NSWindowCollectionBehaviorStationary |
-                                NSWindowCollectionBehaviorIgnoresCycle |
-                                NSWindowCollectionBehaviorFullScreenAuxiliary;
-        self.notchOverlay = w;
-    } else {
-        [self.notchOverlay setFrame:frame display:NO];
-    }
-    [self.notchOverlay orderFront:nil];
-}
-
-- (void)tearDownNotchOverlay {
-    if (!self.notchOverlay) return;
-    [self.notchOverlay orderOut:nil];
-    self.notchOverlay = nil;
 }
 
 // ── Menu building ───────────────────────────────────────────────────────────
@@ -617,12 +548,6 @@ static const size_t kCommonHiDPICount =
                                        key:kConfirmDisable]];
     [menu addItem:[self checkItemWithTitle:@"Show all resolutions"
                                        key:kShowResolutions]];
-
-    // Hide-the-notch is only offered when a notched display is actually attached.
-    if ([self notchedScreen]) {
-        [menu addItem:[self checkItemWithTitle:@"Hide the notch on built-in display"
-                                           key:kHideNotch]];
-    }
     [menu addItem:[NSMenuItem separatorItem]];
 
     BOOL loginEnabled = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled);
@@ -1082,7 +1007,6 @@ static const size_t kCommonHiDPICount =
     sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
     // kShowResolutions changes the menu's structure, not just a checkmark state.
     if ([key isEqualToString:kShowResolutions]) [self rebuildMenu];
-    if ([key isEqualToString:kHideNotch])       [self updateNotchOverlay];
 }
 
 // ── Confirmation dialog ─────────────────────────────────────────────────────
