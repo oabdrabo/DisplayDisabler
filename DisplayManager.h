@@ -29,7 +29,6 @@ typedef NS_ERROR_ENUM(DDErrorDomain, DDErrorCode) {
     DDErrorVirtualCreateFailed   = 9,
     DDErrorVirtualApplyFailed    = 10,
     DDErrorVirtualNoDisplayID    = 11,
-    DDErrorPhysicalSizeUnknown   = 12,
 };
 
 // ── Display info model ──────────────────────────────────────────────────────
@@ -85,7 +84,6 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
 // HiDPI (native)
-- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
 - (BOOL)switchToHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
 // HiDPI forcing via CGVirtualDisplay (macOS 14+).

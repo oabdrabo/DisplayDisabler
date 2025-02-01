@@ -135,6 +135,7 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 @property (nonatomic, strong) DDDisplayMode *preForceMode;
 - (void)scheduleChangeNotification;
 - (void)handleSharedVirtualDisplayTerminated;
+- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
 @end
 
 static void displayReconfigCallback(CGDirectDisplayID display __unused,
