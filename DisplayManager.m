@@ -637,6 +637,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
             @"process is an OS-level limit)."));
         return;
     }
+    // Snapshot the target's current bounds BEFORE any mirror / mode change,
+    // so we can place the virtual at the same origin afterwards and keep
+    // the cursor-topology aligned with the other displays.
+    CGRect preForceBounds = CGDisplayBounds(displayID);
+
     // Resolve target pixel size (the virtual's HiDPI logical).
     size_t pixelWidth = 0, pixelHeight = 0;
     if (targetMode) {
@@ -777,6 +782,18 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     // to the same content rendered natively on the panel. Best-effort — a
     // gamma mismatch is a quality issue, not a failure.
     [self matchGammaFromDisplay:displayID toDisplay:virtualID];
+
+    // Place the virtual at the target's pre-force origin so the cursor
+    // topology doesn't shift. Without this, macOS picks an arbitrary origin
+    // for the newly-created virtual, which can leave the virtual and any
+    // other active displays (externals) with non-overlapping Y ranges — the
+    // cursor then hits an invisible wall when crossing between them.
+    // Best-effort: a failure here is cosmetic, force itself still works.
+    [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        return CGConfigureDisplayOrigin(config, virtualID,
+                                        (int32_t)preForceBounds.origin.x,
+                                        (int32_t)preForceBounds.origin.y);
+    } error:NULL];
 
     self.forcedPhysical = displayID;
     self.forcedTarget   = targetMode ?: preForce;
