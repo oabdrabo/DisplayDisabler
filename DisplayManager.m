@@ -783,16 +783,34 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     // gamma mismatch is a quality issue, not a failure.
     [self matchGammaFromDisplay:displayID toDisplay:virtualID];
 
-    // Place the virtual at the target's pre-force origin so the cursor
-    // topology doesn't shift. Without this, macOS picks an arbitrary origin
-    // for the newly-created virtual, which can leave the virtual and any
-    // other active displays (externals) with non-overlapping Y ranges — the
-    // cursor then hits an invisible wall when crossing between them.
-    // Best-effort: a failure here is cosmetic, force itself still works.
+    // Realign the whole cursor topology in a single atomic transaction:
+    //   - virtual takes the target panel's pre-force origin
+    //   - every other active non-virtual display is stacked to its right,
+    //     top-aligned with the virtual — so the cursor can cross freely
+    //     at any Y in their shared range.
+    // Without this, macOS auto-places the new virtual and leaves externals
+    // at their old Y offset, which produces an invisible "wall" where the
+    // Y-ranges don't overlap. Best-effort: a failure here is cosmetic.
+    CGRect virtualBounds = CGDisplayBounds(virtualID);
+    NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
     [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-        return CGConfigureDisplayOrigin(config, virtualID,
-                                        (int32_t)preForceBounds.origin.x,
-                                        (int32_t)preForceBounds.origin.y);
+        CGError e = CGConfigureDisplayOrigin(config, virtualID,
+                                             (int32_t)preForceBounds.origin.x,
+                                             (int32_t)preForceBounds.origin.y);
+        if (e != kCGErrorSuccess) return e;
+        int32_t x = (int32_t)(preForceBounds.origin.x + virtualBounds.size.width);
+        int32_t y = (int32_t)preForceBounds.origin.y;
+        for (NSNumber *didNum in online) {
+            CGDirectDisplayID other = didNum.unsignedIntValue;
+            if (other == displayID) continue;            // target is now mirrored
+            if (other == virtualID) continue;
+            if ([self isVirtualDisplayID:other]) continue;
+            if (!CGDisplayIsActive(other)) continue;
+            e = CGConfigureDisplayOrigin(config, other, x, y);
+            if (e != kCGErrorSuccess) return e;
+            x += (int32_t)CGDisplayBounds(other).size.width;
+        }
+        return kCGErrorSuccess;
     } error:NULL];
 
     self.forcedPhysical = displayID;
