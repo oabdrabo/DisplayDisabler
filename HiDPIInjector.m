@@ -182,8 +182,14 @@ static NSString *escapeForAppleScript(NSString *s) {
                 completion:(void (^)(BOOL ok, NSError * _Nullable err))completion {
     // NSAppleScript is not thread-safe — must execute on the main thread.
     // The auth prompt is modal anyway, so blocking the main run loop while
-    // the user types their password is the expected behavior.
-    NSAssert([NSThread isMainThread], @"runPrivilegedShell must be called on main");
+    // the user types their password is the expected behavior. Enforce the
+    // thread invariant with a live runtime check (NSAssert would compile out
+    // under -DNDEBUG; explicit early-return survives Release builds).
+    if (![NSThread isMainThread]) {
+        completion(NO, injectorError(-1,
+            @"runPrivilegedShell must be called on the main thread."));
+        return;
+    }
 
     NSString *escaped = escapeForAppleScript(script);
     NSString *source = [NSString stringWithFormat:

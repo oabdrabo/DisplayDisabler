@@ -40,18 +40,11 @@ static const NSUInteger kModeColType    = 10;
 // when the panel doesn't advertise them as a mode. These go through the
 // virtual-display path — macOS scales the mirror to the panel's real pixels.
 static const struct { size_t w, h; } kCommonHiDPIResolutions[] = {
-    {1280,  800},
-    {1440,  900},
-    {1600, 1000},
-    {1680, 1050},
-    {1920, 1080},
-    {1920, 1200},
-    {2048, 1280},
-    {2560, 1440},
-    {2560, 1600},
-    {3008, 1692},
-    {3456, 2160},
-    {3840, 2160},
+    {1920, 1080},   // 16:9  FHD
+    {1920, 1200},   // 16:10
+    {2560, 1440},   // 16:9  QHD
+    {2560, 1600},   // 16:10
+    {3840, 2160},   // 16:9  UHD
 };
 static const size_t kCommonHiDPICount =
     sizeof kCommonHiDPIResolutions / sizeof *kCommonHiDPIResolutions;
@@ -325,13 +318,10 @@ static const size_t kCommonHiDPICount =
         NSArray<DDDisplayMode *> *candidates =
             [self.displayManager forceHiDPICandidatesFromModes:modes];
         if (candidates.count > 0) {
-            NSSet<NSString *> *nativeKeys =
-                [self.displayManager nativeHiDPIPixelKeysFromModes:modes];
             NSMenuItem *forceItem = [[NSMenuItem alloc]
                 initWithTitle:@"    Force HiDPI" action:nil keyEquivalent:@""];
             forceItem.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID
-                                                            candidates:candidates
-                                                            nativeKeys:nativeKeys];
+                                                            candidates:candidates];
             [menu addItem:forceItem];
         }
     }
@@ -380,27 +370,33 @@ static const size_t kCommonHiDPICount =
 }
 
 - (NSMenu *)buildForceHiDPISubmenuForDisplay:(CGDirectDisplayID)displayID
-                                  candidates:(NSArray<DDDisplayMode *> *)candidates
-                                  nativeKeys:(NSSet<NSString *> *)nativeKeys {
+                                  candidates:(NSArray<DDDisplayMode *> *)candidates {
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
     NSFont *mono     = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     NSFont *monoBold = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
 
-    NSMenuItem *header = [[NSMenuItem alloc]
-        initWithTitle:@"Mirror into a 2\u00D7 virtual display"
-               action:nil keyEquivalent:@""];
-    header.enabled = NO;
-    [submenu addItem:header];
-    [submenu addItem:[NSMenuItem separatorItem]];
-
     DDDisplayMode *currentlyForced = [self.displayManager forcedTargetForDisplay:displayID];
 
     static const NSUInteger kPixelColWidth = 15;
     static const NSUInteger kHzColWidth    = 8;
 
+    // Build force rows first into a temporary array; we only emit the "Mirror"
+    // header if at least one pixel size survives native-filtering.
+    NSMutableArray<NSMenuItem *> *forceItems = [NSMutableArray array];
+
     for (DDDisplayMode *mode in candidates) {
+        // Skip pixel sizes that only have a HiDPI variant in the panel's mode
+        // list — forcing them would be redundant with just switching to that
+        // HiDPI mode via All Resolutions (virtual logical ends up equal to
+        // the HiDPI variant's logical, i.e. pixel/2). We only offer a row
+        // when a Standard variant exists for this pixel size: forcing then
+        // gives a big-workspace supersampled render that All Resolutions
+        // can't. (forceHiDPICandidatesFromModes: prefers Standard when both
+        // exist, so this check is just `!mode.isHiDPI`.)
+        if (mode.isHiDPI) continue;
+
         NSString *pixelStr = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
                                mode.pixelWidth, mode.pixelHeight]
                               stringByPaddingToLength:kPixelColWidth
@@ -415,14 +411,8 @@ static const size_t kCommonHiDPICount =
                                       withString:@" " startingAtIndex:0];
         }
 
-        NSString *key = [NSString stringWithFormat:@"%zu_%zu",
-                         mode.pixelWidth, mode.pixelHeight];
-        // "native" = a native HiDPI mode for this pixel size also exists, so
-        // forcing here is a supersample-style choice rather than the only path
-        // to HiDPI. No marker = Standard-only pixel size, where force is it.
-        NSString *tag = [nativeKeys containsObject:key] ? @"\u25CE native" : @"\u26A1 force";
-
-        NSString *line = [NSString stringWithFormat:@"%@%@%@", pixelStr, hzStr, tag];
+        NSString *line = [NSString stringWithFormat:@"%@%@\u26A1 force",
+                          pixelStr, hzStr];
 
         BOOL isCurrent = (currentlyForced &&
                           currentlyForced.pixelWidth  == mode.pixelWidth &&
@@ -439,14 +429,24 @@ static const size_t kCommonHiDPICount =
             initWithString:line
                 attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
         if (isCurrent) item.state = NSControlStateValueOn;
-        [submenu addItem:item];
+        [forceItems addObject:item];
+    }
+
+    if (forceItems.count > 0) {
+        NSMenuItem *header = [[NSMenuItem alloc]
+            initWithTitle:@"Mirror into a 2\u00D7 virtual display"
+                   action:nil keyEquivalent:@""];
+        header.enabled = NO;
+        [submenu addItem:header];
+        [submenu addItem:[NSMenuItem separatorItem]];
+        for (NSMenuItem *item in forceItems) [submenu addItem:item];
+        [submenu addItem:[NSMenuItem separatorItem]];
     }
 
     // Common HiDPI presets: pixel sizes not in the panel's mode list, but that
     // the virtual-display pipeline can still render at (macOS scales the
     // mirror). Built as synthetic DDDisplayMode objects with modeRef=nil so
     // forceHiDPIForDisplay:atMode:completion: skips the panel mode switch.
-    [submenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *commonHeader = [[NSMenuItem alloc]
         initWithTitle:@"Common HiDPI resolutions" action:nil keyEquivalent:@""];
     commonHeader.enabled = NO;
@@ -516,9 +516,7 @@ static const size_t kCommonHiDPICount =
 
     [submenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *legend = [[NSMenuItem alloc]
-        initWithTitle:@"\u25CE native  \u2014  "
-                      @"\u26A1 force  \u2014  "
-                      @"\u2295 custom (virtual-only)"
+        initWithTitle:@"\u26A1 force  \u2014  \u2295 custom (virtual-only)"
                action:nil keyEquivalent:@""];
     legend.enabled = NO;
     [submenu addItem:legend];

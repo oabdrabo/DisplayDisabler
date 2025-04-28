@@ -133,6 +133,10 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 @property (nonatomic) CGDirectDisplayID forcedPhysical;
 @property (nonatomic, strong) DDDisplayMode *forcedTarget;
 @property (nonatomic, strong) DDDisplayMode *preForceMode;
+// Snapshot of every active display's origin before the force, so we can
+// restore the whole topology on stop — not just the target's mode. Without
+// this, other displays stay where the force stacked them (right of virtual).
+@property (nonatomic, strong) NSDictionary<NSNumber *, NSValue *> *preForceTopology;
 - (void)scheduleChangeNotification;
 - (void)handleSharedVirtualDisplayTerminated;
 - (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
@@ -205,9 +209,10 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 - (void)handleSharedVirtualDisplayTerminated {
     if (!self.sharedVirtualDisplay) return;
     self.sharedVirtualDisplay = nil;
-    self.forcedPhysical = kCGNullDirectDisplay;
-    self.forcedTarget   = nil;
-    self.preForceMode   = nil;
+    self.forcedPhysical   = kCGNullDirectDisplay;
+    self.forcedTarget     = nil;
+    self.preForceMode     = nil;
+    self.preForceTopology = nil;
     NSLog(@"DisplayDisabler: Shared virtual display terminated externally.");
     [self scheduleChangeNotification];
 }
@@ -510,7 +515,42 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
 // ── Force HiDPI via CGVirtualDisplay ────────────────────────────────────────
 
+// Find a CGDisplayModeRef on `virtualID` whose logical (point) size matches
+// (lw, lh). Prefers the HiDPI variant (pixel > logical) so the virtual renders
+// at 2× pixel backing for supersampling; falls back to Standard if no HiDPI
+// variant exists. Returns a retained ref — caller must CGDisplayModeRelease.
+// CFArrayGetValueAtIndex returns an unowned pointer whose lifetime ends with
+// the array's release, so the CGDisplayModeRetain before CFRelease is what
+// keeps the chosen mode alive for the caller.
+- (CGDisplayModeRef)copyVirtualDisplayModeForVirtual:(CGDirectDisplayID)virtualID
+                                         logicalWidth:(size_t)lw
+                                        logicalHeight:(size_t)lh CF_RETURNS_RETAINED {
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(virtualID, NULL);
+    if (!modes) return NULL;
+
+    CGDisplayModeRef hidpi = NULL, standard = NULL;
+    CFIndex n = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < n; i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (CGDisplayModeGetWidth(m)  != lw) continue;
+        if (CGDisplayModeGetHeight(m) != lh) continue;
+        if (CGDisplayModeGetPixelWidth(m) > lw) {
+            if (!hidpi) hidpi = m;
+        } else {
+            if (!standard) standard = m;
+        }
+    }
+    CGDisplayModeRef chosen = hidpi ?: standard;
+    if (chosen) CGDisplayModeRetain(chosen);
+    CFRelease(modes);
+    return chosen;
+}
+
 // Wait until `vdID` appears in CGGetOnlineDisplayList, or timeout.
+// This runs the main runloop between probes (not a busy-wait) — the runloop
+// sleeps on events and wakes when the display-reconfiguration callback fires,
+// so on the common path we return as soon as macOS registers the VD. The 50ms
+// ceiling caps the worst-case latency if no reconfig callback fires at all.
 - (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
     while ([deadline compare:[NSDate date]] == NSOrderedDescending) {
@@ -531,24 +571,21 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
 // Ensure the singleton shared virtual display exists, sized large enough to
 // cover any plausible target (10240×5760 — enough for a 5K panel at 2×), and
-// re-apply settings with the caller's target pixel dimensions so macOS knows
-// to render to virtual at 2× the target for HiDPI supersampling.
-- (CGVirtualDisplay *)ensureSharedVirtualDisplayWithTargetPixelWidth:(size_t)pw
-                                                         pixelHeight:(size_t)ph
-                                                               error:(NSError **)error {
+// re-apply settings advertising a single (lw × lh) logical mode with HiDPI
+// so the virtual has a 2× pixel backing at that logical size.
+- (CGVirtualDisplay *)ensureSharedVirtualDisplayWithLogicalWidth:(size_t)lw
+                                                          height:(size_t)lh
+                                                           error:(NSError **)error {
     Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
     Class modeClass     = NSClassFromString(@"CGVirtualDisplayMode");
 
-    // CGVirtualDisplayMode.width/height are LOGICAL (points), not pixels —
-    // hiDPI=1 then gives a 2× pixel backing. Passing (pw*2, ph*2) would make
-    // the virtual logical = 2×target (huge workspace) which creates phantom
-    // dead zones at the cursor edges where the mirrored physical panel can't
-    // reach. Single mode at (pw, ph) matches force-hidpi's own pattern and
-    // gives virtual logical = target exactly.
+    // CGVirtualDisplayMode.width/height are LOGICAL (points). hiDPI=1 then
+    // gives a 2× pixel backing, so the mode we advertise has logical=(lw,lh)
+    // and pixel=(lw*2,lh*2) — normal HiDPI with cursor canvas matching lw×lh.
     CGVirtualDisplaySettings *settings = [[settingsClass alloc] init];
     settings.hiDPI = 1;
     settings.modes = @[
-        [[modeClass alloc] initWithWidth:pw height:ph refreshRate:60.0],
+        [[modeClass alloc] initWithWidth:lw height:lh refreshRate:60.0],
     ];
 
     CGVirtualDisplay *vd = self.sharedVirtualDisplay;
@@ -647,11 +684,27 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     // the cursor-topology aligned with the other displays.
     CGRect preForceBounds = CGDisplayBounds(displayID);
 
-    // Resolve target pixel size (the virtual's HiDPI logical).
-    size_t pixelWidth = 0, pixelHeight = 0;
+    // Snapshot every active display's origin so we can restore the full
+    // pre-force topology on stop. The force step stacks other displays to
+    // the right of the virtual; without this snapshot they stay where the
+    // force put them after unforce or app quit.
+    NSMutableDictionary<NSNumber *, NSValue *> *topology = [NSMutableDictionary dictionary];
+    for (NSNumber *didNum in ddQueryDisplayList(CGGetActiveDisplayList)) {
+        CGDirectDisplayID did = didNum.unsignedIntValue;
+        if ([self isVirtualDisplayID:did]) continue;
+        CGRect b = CGDisplayBounds(did);
+        topology[didNum] = [NSValue valueWithPoint:NSMakePoint(b.origin.x, b.origin.y)];
+    }
+
+    // Resolve the virtual's target logical size (points). For a ⚡ force row
+    // (Standard-only panel mode) logicalWidth equals pixelWidth; for a ⊕
+    // custom row (synthetic) we set logical == pixel at construction. Passing
+    // this as the virtual's advertised logical makes its cursor canvas match
+    // the target exactly.
+    size_t targetLogicalWidth = 0, targetLogicalHeight = 0;
     if (targetMode) {
-        pixelWidth  = targetMode.pixelWidth;
-        pixelHeight = targetMode.pixelHeight;
+        targetLogicalWidth  = targetMode.logicalWidth;
+        targetLogicalHeight = targetMode.logicalHeight;
     } else {
         CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
         if (!curMode) {
@@ -659,8 +712,8 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
                                     @"Could not read current display mode."));
             return;
         }
-        pixelWidth  = CGDisplayModeGetPixelWidth(curMode);
-        pixelHeight = CGDisplayModeGetPixelHeight(curMode);
+        targetLogicalWidth  = CGDisplayModeGetWidth(curMode);
+        targetLogicalHeight = CGDisplayModeGetHeight(curMode);
         CGDisplayModeRelease(curMode);
     }
 
@@ -676,8 +729,8 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     NSArray<DDDisplayMode *> *panelModes = [self modesForDisplay:displayID];
     CGDisplayModeRef switchMode = targetMode ? targetMode.modeRef : NULL;
     if (targetMode && !switchMode) {
-        size_t wantPW = pixelWidth * 2;
-        size_t wantPH = pixelHeight * 2;
+        size_t wantPW = targetLogicalWidth  * 2;
+        size_t wantPH = targetLogicalHeight * 2;
 
         // Pass 1: exact 2× match (Standard preferred).
         for (DDDisplayMode *m in panelModes) {
@@ -728,9 +781,9 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     }
 
     NSError *vdErr = nil;
-    CGVirtualDisplay *vd = [self ensureSharedVirtualDisplayWithTargetPixelWidth:pixelWidth
-                                                                   pixelHeight:pixelHeight
-                                                                         error:&vdErr];
+    CGVirtualDisplay *vd = [self ensureSharedVirtualDisplayWithLogicalWidth:targetLogicalWidth
+                                                                     height:targetLogicalHeight
+                                                                      error:&vdErr];
     if (!vd) { deliver(NO, vdErr); return; }
     CGDirectDisplayID virtualID = vd.displayID;
 
@@ -740,6 +793,16 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     if (![self waitForVirtualDisplayOnline:virtualID timeout:kDDVirtualOnlineTimeout]) {
         deliver(NO, ddMakeError(DDErrorVirtualCreateFailed,
                                 @"Virtual display did not appear online."));
+        return;
+    }
+
+    // Re-validate that the target physical is still connected. The VD create +
+    // online-wait introduces a window (up to kDDVirtualOnlineTimeout) in which
+    // the user could unplug the display — continuing into mirror with a stale
+    // ID would fail confusingly, or worse, mirror into nothing.
+    if (!CGDisplayIsActive(displayID)) {
+        deliver(NO, ddMakeError(DDErrorNotForced,
+                                @"Target display disconnected before the force could be applied."));
         return;
     }
 
@@ -781,6 +844,29 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         }
     }
 
+    // Pin the virtual onto OUR advertised (targetLogical × targetLogical HiDPI)
+    // mode. After the mirror+panel-switch above, macOS may have auto-selected
+    // a virtual mode whose pixel count matches the physical's current mode
+    // (auto-generated from the descriptor's 10240×5760 envelope). If the auto-
+    // picked mode doesn't equal what applySettings advertised, the virtual's
+    // logical ends up ≠ target and every pointer event fires at the wrong
+    // coordinate (cursor visual at X, event at 2X). Explicit switch closes
+    // that gap. Best-effort: worst case we fall back to the auto-pick.
+    CGDisplayModeRef virtualMode = [self copyVirtualDisplayModeForVirtual:virtualID
+                                                              logicalWidth:targetLogicalWidth
+                                                             logicalHeight:targetLogicalHeight];
+    if (virtualMode) {
+        NSError *pinErr = nil;
+        BOOL pinned = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+            return CGConfigureDisplayWithDisplayMode(config, virtualID, virtualMode, NULL);
+        } error:&pinErr];
+        if (!pinned) {
+            NSLog(@"DisplayDisabler: Warning: could not pin virtual mode to %zu\u00D7%zu: %@",
+                  targetLogicalWidth, targetLogicalHeight, pinErr);
+        }
+        CGDisplayModeRelease(virtualMode);
+    }
+
     // Match the virtual display's gamma table to the physical panel's so the
     // compositor renders to virtual with the correct transfer curve. Without
     // this, mirrored HiDPI content shows a mild color/contrast shift relative
@@ -798,7 +884,8 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     // Y-ranges don't overlap. Best-effort: a failure here is cosmetic.
     CGRect virtualBounds = CGDisplayBounds(virtualID);
     NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
-    [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+    NSError *topoErr = nil;
+    BOOL topoOk = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         CGError e = CGConfigureDisplayOrigin(config, virtualID,
                                              (int32_t)preForceBounds.origin.x,
                                              (int32_t)preForceBounds.origin.y);
@@ -816,14 +903,18 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
             x += (int32_t)CGDisplayBounds(other).size.width;
         }
         return kCGErrorSuccess;
-    } error:NULL];
+    } error:&topoErr];
+    if (!topoOk) {
+        NSLog(@"DisplayDisabler: Warning: cursor-topology alignment failed: %@", topoErr);
+    }
 
-    self.forcedPhysical = displayID;
-    self.forcedTarget   = targetMode ?: preForce;
-    self.preForceMode   = preForce;
+    self.forcedPhysical   = displayID;
+    self.forcedTarget     = targetMode ?: preForce;
+    self.preForceMode     = preForce;
+    self.preForceTopology = topology;
 
     NSLog(@"DisplayDisabler: Forced HiDPI for display 0x%X at %zu\u00D7%zu via virtual 0x%X",
-          displayID, pixelWidth, pixelHeight, virtualID);
+          displayID, targetLogicalWidth, targetLogicalHeight, virtualID);
     deliver(YES, nil);
 }
 
@@ -850,17 +941,18 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 - (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes {
     if (modes.count == 0) return @[];
 
-    // One representative per distinct pixel size. Prefer a Standard mode (the
-    // panel already drives that pixel count 1:1, which is what we want before
-    // mirror+switch). Fall back to a HiDPI representative if no Standard exists
-    // for that size. Among ties, pick the highest refresh.
+    // One representative per distinct pixel size. Prefer the Standard variant
+    // so logicalWidth == pixelWidth — the correct value to pass as the virtual
+    // display's advertised logical size. HiDPI variants are only used as a
+    // fallback (no Standard exists). Panel pixel sizes that have a native
+    // HiDPI variant are filtered out at the UI layer (nativeKeys) because
+    // they belong in All Resolutions, not Force HiDPI. Ties: highest refresh.
     NSMutableDictionary<NSString *, DDDisplayMode *> *byPixel = [NSMutableDictionary dictionary];
     for (DDDisplayMode *m in modes) {
         NSString *key = [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight];
         DDDisplayMode *cur = byPixel[key];
         if (!cur) { byPixel[key] = m; continue; }
-        BOOL curIsStd = !cur.isHiDPI, mIsStd = !m.isHiDPI;
-        if (curIsStd != mIsStd) { if (mIsStd) byPixel[key] = m; continue; }
+        if (cur.isHiDPI != m.isHiDPI) { if (!m.isHiDPI) byPixel[key] = m; continue; }
         if (m.refreshRate > cur.refreshRate) byPixel[key] = m;
     }
 
@@ -871,18 +963,30 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     }];
 }
 
-- (NSSet<NSString *> *)nativeHiDPIPixelKeysFromModes:(NSArray<DDDisplayMode *> *)modes {
-    NSMutableSet<NSString *> *set = [NSMutableSet set];
-    for (DDDisplayMode *m in modes) {
-        if (m.isHiDPI) {
-            [set addObject:[NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight]];
-        }
-    }
-    return set;
-}
-
 - (DDDisplayMode *)forcedTargetForDisplay:(CGDirectDisplayID)displayID {
     return (self.forcedPhysical == displayID) ? self.forcedTarget : nil;
+}
+
+// Restore the pre-force origin of every display we snapshotted. Best-effort:
+// a failure here is cosmetic (displays stay in the force-time positions) but
+// we log it so it's visible.
+- (void)restorePreForceTopology {
+    NSDictionary<NSNumber *, NSValue *> *topology = self.preForceTopology;
+    if (topology.count == 0) return;
+    NSError *err = nil;
+    BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        for (NSNumber *didNum in topology) {
+            CGDirectDisplayID did = didNum.unsignedIntValue;
+            if (!CGDisplayIsActive(did)) continue;
+            NSPoint p = [topology[didNum] pointValue];
+            CGError e = CGConfigureDisplayOrigin(config, did, (int32_t)p.x, (int32_t)p.y);
+            if (e != kCGErrorSuccess) return e;
+        }
+        return kCGErrorSuccess;
+    } error:&err];
+    if (!ok) {
+        NSLog(@"DisplayDisabler: Warning: topology restore failed: %@", err);
+    }
 }
 
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
@@ -907,9 +1011,12 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         }
     }
 
-    self.forcedPhysical = kCGNullDirectDisplay;
-    self.forcedTarget   = nil;
-    self.preForceMode   = nil;
+    [self restorePreForceTopology];
+
+    self.forcedPhysical   = kCGNullDirectDisplay;
+    self.forcedTarget     = nil;
+    self.preForceMode     = nil;
+    self.preForceTopology = nil;
     // sharedVirtualDisplay is deliberately retained — see property comment.
 
     NSLog(@"DisplayDisabler: Stopped forced HiDPI for display 0x%X", displayID);
@@ -930,9 +1037,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
                 return CGConfigureDisplayWithDisplayMode(config, did, pre.modeRef, NULL);
             } error:NULL];
         }
-        self.forcedPhysical = kCGNullDirectDisplay;
-        self.forcedTarget   = nil;
-        self.preForceMode   = nil;
+        [self restorePreForceTopology];
+        self.forcedPhysical   = kCGNullDirectDisplay;
+        self.forcedTarget     = nil;
+        self.preForceMode     = nil;
+        self.preForceTopology = nil;
     }
 
     // Releasing the shared VD here is mostly a formality — the process is
@@ -953,9 +1062,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     CGDirectDisplayID did = self.forcedPhysical;
     NSLog(@"DisplayDisabler: Forced display 0x%X disconnected, clearing force state.", did);
     [self unmirrorDisplay:did];
-    self.forcedPhysical = kCGNullDirectDisplay;
-    self.forcedTarget   = nil;
-    self.preForceMode   = nil;
+    [self restorePreForceTopology];
+    self.forcedPhysical   = kCGNullDirectDisplay;
+    self.forcedTarget     = nil;
+    self.preForceMode     = nil;
+    self.preForceTopology = nil;
     // sharedVirtualDisplay stays alive for the next force.
 }
 

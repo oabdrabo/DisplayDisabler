@@ -65,6 +65,6 @@ uninstall:
 	@echo "Removed /Applications/$(BUNDLE)"
 
 clean:
-	@rm -f $(OBJECTS) $(DEPS) $(EXECUTABLE)
-	@rm -rf "$(BUNDLE)"
+	@rm -f $(OBJECTS) $(DEPS) $(EXECUTABLE) AppIcon.icns
+	@rm -rf "$(BUNDLE)" AppIcon.iconset
 	@echo "Cleaned"

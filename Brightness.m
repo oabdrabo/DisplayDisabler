@@ -108,10 +108,10 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
 
     io_registry_entry_t root = IORegistryGetRootEntry(kIOMainPortDefault);
     io_iterator_t iter = 0;
-    if (IORegistryEntryCreateIterator(root, kIOServicePlane,
-                                      kIORegistryIterateRecursively, &iter) != KERN_SUCCESS) {
-        return NULL;
-    }
+    kern_return_t kr = IORegistryEntryCreateIterator(root, kIOServicePlane,
+                                                     kIORegistryIterateRecursively, &iter);
+    IOObjectRelease(root);
+    if (kr != KERN_SUCCESS) return NULL;
 
     IOAVServiceRef found = NULL;
     BOOL foundParent = NO;

@@ -94,14 +94,10 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
                   completion:(DDForceHiDPICompletion)completion;
 // From a mode list (as returned by -modesForDisplay:), return one representative
 // DDDisplayMode per distinct pixel resolution — Standard variant when available,
-// otherwise the HiDPI one. Every pixel size the panel supports is included, so
-// Force HiDPI is offered even for panels whose every resolution already has a
-// native HiDPI mode (like the built-in MacBook display). Sorted desc by area.
+// otherwise the HiDPI one. The UI filters out the HiDPI-only rows because
+// forcing them would be redundant with a regular mode-switch in All Resolutions.
+// Sorted desc by area.
 - (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes;
-// Pixel-size keys from the mode list that have at least one native HiDPI mode
-// (i.e. `pw × ph` such that some mode with those pixels is `pw > lw`). Used by
-// the UI to label candidate rows "(native)".
-- (NSSet<NSString *> *)nativeHiDPIPixelKeysFromModes:(NSArray<DDDisplayMode *> *)modes;
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)isHiDPIForcedForDisplay:(CGDirectDisplayID)displayID;
 // The target mode currently forced for this display, or nil if not forced.
