@@ -569,12 +569,47 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return NO;
 }
 
+// Pick color primaries for the virtual display descriptor from the source
+// panel's named color space. For the common cases (built-in P3, older sRGB
+// externals) this lets apps render into the correct wide-gamut/sRGB space
+// instead of a blind P3 assumption. For calibrated-ICC or custom profiles
+// CGColorSpaceCopyName returns NULL — we fall back to P3 (the modern-Apple
+// default). CGVirtualDisplay's descriptor only accepts primaries + white
+// point, so true ICC/calibration passthrough is fundamentally impossible.
+static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
+                                      CGPoint *red, CGPoint *green,
+                                      CGPoint *blue, CGPoint *white) {
+    // Display P3 (default / modern Apple).
+    *red   = CGPointMake(0.6800, 0.3200);
+    *green = CGPointMake(0.2650, 0.6900);
+    *blue  = CGPointMake(0.1500, 0.0600);
+    *white = CGPointMake(0.3127, 0.3290);
+    if (!cs) return;
+    CFStringRef name = CGColorSpaceCopyName(cs);
+    if (!name) return;
+    if (CFEqual(name, kCGColorSpaceSRGB) ||
+        CFEqual(name, kCGColorSpaceLinearSRGB) ||
+        CFEqual(name, kCGColorSpaceExtendedSRGB) ||
+        CFEqual(name, kCGColorSpaceGenericRGB)) {
+        // sRGB / Rec.709 primaries, D65.
+        *red   = CGPointMake(0.6400, 0.3300);
+        *green = CGPointMake(0.3000, 0.6000);
+        *blue  = CGPointMake(0.1500, 0.0600);
+        *white = CGPointMake(0.3127, 0.3290);
+    }
+    CFRelease(name);
+}
+
 // Ensure the singleton shared virtual display exists, sized large enough to
 // cover any plausible target (10240×5760 — enough for a 5K panel at 2×), and
 // re-apply settings advertising a single (lw × lh) logical mode with HiDPI
-// so the virtual has a 2× pixel backing at that logical size.
+// so the virtual has a 2× pixel backing at that logical size. The refresh
+// rate matches the source panel's current refresh so ProMotion (120Hz) and
+// high-refresh externals aren't pegged to 60Hz.
 - (CGVirtualDisplay *)ensureSharedVirtualDisplayWithLogicalWidth:(size_t)lw
                                                           height:(size_t)lh
+                                                     refreshRate:(double)refreshRate
+                                                   sourceDisplay:(CGDirectDisplayID)sourceID
                                                            error:(NSError **)error {
     Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
     Class modeClass     = NSClassFromString(@"CGVirtualDisplayMode");
@@ -582,10 +617,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     // CGVirtualDisplayMode.width/height are LOGICAL (points). hiDPI=1 then
     // gives a 2× pixel backing, so the mode we advertise has logical=(lw,lh)
     // and pixel=(lw*2,lh*2) — normal HiDPI with cursor canvas matching lw×lh.
+    double rate = (refreshRate > 0) ? refreshRate : 60.0;
     CGVirtualDisplaySettings *settings = [[settingsClass alloc] init];
     settings.hiDPI = 1;
     settings.modes = @[
-        [[modeClass alloc] initWithWidth:lw height:lh refreshRate:60.0],
+        [[modeClass alloc] initWithWidth:lw height:lh refreshRate:rate],
     ];
 
     CGVirtualDisplay *vd = self.sharedVirtualDisplay;
@@ -616,15 +652,19 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     desc.vendorID          = 0xDD;
     desc.productID         = 0x01;
     desc.serialNum         = 1;
-    // Display P3 primaries with D65 white — the colorspace modern Apple
-    // displays (MacBook built-ins, Studio Display, LG UltraFine) speak
-    // natively. Telling macOS the virtual is P3-capable lets the compositor
-    // render in P3 and hand wide-gamut content to the panel directly. For
-    // sRGB-only externals macOS color-manages P3→sRGB.
-    desc.redPrimary   = CGPointMake(0.6800, 0.3200);
-    desc.greenPrimary = CGPointMake(0.2650, 0.6900);
-    desc.bluePrimary  = CGPointMake(0.1500, 0.0600);
-    desc.whitePoint   = CGPointMake(0.3127, 0.3290);
+    // Match the source panel's color primaries so apps render into the
+    // right gamut. For Apple Silicon built-ins and modern externals this
+    // is P3; for older sRGB panels it's sRGB. Calibrated ICCs can't be
+    // matched — the descriptor only takes primaries + white point.
+    CGPoint redPri, greenPri, bluePri, whitePt;
+    CGColorSpaceRef sourceCS = (sourceID != kCGNullDirectDisplay)
+                                ? CGDisplayCopyColorSpace(sourceID) : NULL;
+    ddPrimariesForColorSpace(sourceCS, &redPri, &greenPri, &bluePri, &whitePt);
+    if (sourceCS) CFRelease(sourceCS);
+    desc.redPrimary   = redPri;
+    desc.greenPrimary = greenPri;
+    desc.bluePrimary  = bluePri;
+    desc.whitePoint   = whitePt;
 
     __weak __typeof(self) weakSelf = self;
     desc.terminationHandler = ^(id __unused display, id __unused err) {
@@ -780,9 +820,26 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         }
     }
 
+    // Resolve the refresh rate to advertise on the virtual mode. Prefer the
+    // target mode's rate; fall back to the panel's current rate; then 60.
+    // This lets the virtual match ProMotion 120Hz / high-refresh externals
+    // instead of pinning everything to 60Hz.
+    double targetRate = 0.0;
+    if (targetMode && targetMode.refreshRate > 0) {
+        targetRate = targetMode.refreshRate;
+    } else {
+        CGDisplayModeRef cur = CGDisplayCopyDisplayMode(displayID);
+        if (cur) {
+            targetRate = CGDisplayModeGetRefreshRate(cur);
+            CGDisplayModeRelease(cur);
+        }
+    }
+
     NSError *vdErr = nil;
     CGVirtualDisplay *vd = [self ensureSharedVirtualDisplayWithLogicalWidth:targetLogicalWidth
                                                                      height:targetLogicalHeight
+                                                                refreshRate:targetRate
+                                                              sourceDisplay:displayID
                                                                       error:&vdErr];
     if (!vd) { deliver(NO, vdErr); return; }
     CGDirectDisplayID virtualID = vd.displayID;
