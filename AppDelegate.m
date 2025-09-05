@@ -33,7 +33,7 @@ static const CGFloat kSwitchLabelGap   = 8;
 // logical counts, widest label string ("Larger Text"), and 3-digit refresh.
 
 static const NSUInteger kModeColLogical = 17;
-static const NSUInteger kModeColLabel   = 14;
+static const NSUInteger kModeColType    = 10;
 
 // Common HiDPI logical resolutions the user can force on any display, even
 // when the panel doesn't advertise them as a mode. These go through the
@@ -194,10 +194,6 @@ static const size_t kCommonHiDPICount =
 
     [self updateStatusIcon:anyDisabled];
 
-    NSString *version = [[NSBundle mainBundle]
-                         objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-    [self addLabelToMenu:menu title:
-        [NSString stringWithFormat:@"DisplayDisabler v%@", version]];
     [self addLabelToMenu:menu title:
         [NSString stringWithFormat:@"%lu connected, %lu active",
          (unsigned long)displays.count, (unsigned long)activeCount]];
@@ -255,16 +251,9 @@ static const size_t kCommonHiDPICount =
     BOOL effectivelyActive = display.isActive || forced;
     NSString *dot = effectivelyActive ? @"\u25CF " : @"\u25CB ";
 
-    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
+    NSAttributedString *attrTitle = [[NSAttributedString alloc]
         initWithString:[NSString stringWithFormat:@"%@%@", dot, display.name]
             attributes:@{NSFontAttributeName: [NSFont menuBarFontOfSize:14]}];
-    [attrTitle appendAttributedString:[[NSAttributedString alloc]
-        initWithString:[NSString stringWithFormat:@"  0x%X", display.displayID]
-            attributes:@{
-                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10
-                                        weight:NSFontWeightRegular],
-                NSForegroundColorAttributeName: [NSColor tertiaryLabelColor]
-            }]];
 
     NSMenuItem *nameItem = [[NSMenuItem alloc] initWithTitle:@""
                                                       action:nil keyEquivalent:@""];
@@ -284,7 +273,6 @@ static const size_t kCommonHiDPICount =
 }
 
 - (void)addForcedHiDPIControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    [self addLabelToMenu:menu title:@"    \u26A1 HiDPI via virtual display mirroring"];
     [self addActionToMenu:menu title:@"Stop Forced HiDPI"
                    action:@selector(stopForcedHiDPI:) displayID:display.displayID];
 }
@@ -383,101 +371,77 @@ static const size_t kCommonHiDPICount =
 
     DDDisplayMode *currentlyForced = [self.displayManager forcedTargetForDisplay:displayID];
 
-    static const NSUInteger kPixelColWidth = 15;
-    static const NSUInteger kHzColWidth    = 8;
-
-    // Build force rows first into a temporary array; we only emit the "Mirror"
-    // header if at least one pixel size survives native-filtering.
-    NSMutableArray<NSMenuItem *> *forceItems = [NSMutableArray array];
-
-    for (DDDisplayMode *mode in candidates) {
-        // Skip pixel sizes that only have a HiDPI variant in the panel's mode
-        // list — forcing them would be redundant with just switching to that
-        // HiDPI mode via All Resolutions (virtual logical ends up equal to
-        // the HiDPI variant's logical, i.e. pixel/2). We only offer a row
-        // when a Standard variant exists for this pixel size: forcing then
-        // gives a big-workspace supersampled render that All Resolutions
-        // can't. (forceHiDPICandidatesFromModes: prefers Standard when both
-        // exist, so this check is just `!mode.isHiDPI`.)
-        if (mode.isHiDPI) continue;
-
-        NSString *pixelStr = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
-                               mode.pixelWidth, mode.pixelHeight]
-                              stringByPaddingToLength:kPixelColWidth
-                                              withString:@" " startingAtIndex:0];
-        NSString *hzStr;
-        if (mode.refreshRate > 0) {
-            hzStr = [[NSString stringWithFormat:@"%.0fHz", mode.refreshRate]
-                     stringByPaddingToLength:kHzColWidth
-                                  withString:@" " startingAtIndex:0];
-        } else {
-            hzStr = [@"" stringByPaddingToLength:kHzColWidth
-                                      withString:@" " startingAtIndex:0];
-        }
-
-        NSString *line = [NSString stringWithFormat:@"%@%@\u26A1 force",
-                          pixelStr, hzStr];
-
-        BOOL isCurrent = (currentlyForced &&
-                          currentlyForced.pixelWidth  == mode.pixelWidth &&
-                          currentlyForced.pixelHeight == mode.pixelHeight);
-
+    // Format a single row as "looksLike<pad>rate". Keep it consistent with
+    // the All Resolutions submenu: logical size ("Looks Like") first, then
+    // refresh rate. Icons distinguish rows instead of glyph-suffixes:
+    // "bolt" for panel-advertised sizes (the actual panel mode we'll switch
+    // to), "plus.square" for custom presets rendered only via virtual.
+    NSMenuItem * (^makeRow)(DDDisplayMode *, BOOL, DDDisplayMode *, NSString *) =
+        ^NSMenuItem *(DDDisplayMode *mode, BOOL isCurrent,
+                       DDDisplayMode *repMode, NSString *symbolName) {
+        NSString *sizeCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
+                              mode.logicalWidth, mode.logicalHeight]
+                             stringByPaddingToLength:kModeColLogical
+                                         withString:@" " startingAtIndex:0];
+        NSString *rateStr = mode.refreshRate > 0
+            ? [NSString stringWithFormat:@"%.0fHz", mode.refreshRate] : @"";
+        NSString *line = [NSString stringWithFormat:@"%@%@", sizeCol, rateStr];
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:line
                    action:isCurrent ? nil : @selector(forceHiDPIAtMode:)
             keyEquivalent:@""];
         item.target = self;
         item.enabled = !isCurrent;
-        item.representedObject = @{ @"displayID": @(displayID), @"mode": mode };
+        item.representedObject = @{ @"displayID": @(displayID), @"mode": repMode };
         item.attributedTitle = [[NSAttributedString alloc]
             initWithString:line
                 attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
         if (isCurrent) item.state = NSControlStateValueOn;
-        [forceItems addObject:item];
-    }
+        item.image = [NSImage imageWithSystemSymbolName:symbolName
+                                accessibilityDescription:nil];
+        return item;
+    };
 
-    if (forceItems.count > 0) {
-        NSMenuItem *header = [[NSMenuItem alloc]
-            initWithTitle:@"Mirror into a 2\u00D7 virtual display"
-                   action:nil keyEquivalent:@""];
-        header.enabled = NO;
-        [submenu addItem:header];
-        [submenu addItem:[NSMenuItem separatorItem]];
-        for (NSMenuItem *item in forceItems) [submenu addItem:item];
-        [submenu addItem:[NSMenuItem separatorItem]];
-    }
-
-    // Common HiDPI presets: pixel sizes not in the panel's mode list, but that
-    // the virtual-display pipeline can still render at (macOS scales the
-    // mirror). Built as synthetic DDDisplayMode objects with modeRef=nil so
-    // forceHiDPIForDisplay:atMode:completion: skips the panel mode switch.
-    NSMenuItem *commonHeader = [[NSMenuItem alloc]
-        initWithTitle:@"Common HiDPI resolutions" action:nil keyEquivalent:@""];
-    commonHeader.enabled = NO;
-    [submenu addItem:commonHeader];
-
-    // Build a set of pixel keys already listed above so we don't duplicate
-    // entries that happen to match one of the panel's advertised sizes.
-    NSMutableSet<NSString *> *advertisedKeys = [NSMutableSet set];
+    // Panel-advertised rows first. We only offer a row when a Standard
+    // variant exists for this pixel size (logical == pixel); forcing then
+    // gives a big-workspace supersampled render that All Resolutions can't.
+    // forceHiDPICandidatesFromModes: prefers Standard when both exist, so
+    // this check is just `!mode.isHiDPI`.
+    NSMutableArray<NSMenuItem *> *panelItems = [NSMutableArray array];
     for (DDDisplayMode *mode in candidates) {
-        [advertisedKeys addObject:
+        if (mode.isHiDPI) continue;
+        BOOL isCurrent = (currentlyForced &&
+                          currentlyForced.pixelWidth  == mode.pixelWidth &&
+                          currentlyForced.pixelHeight == mode.pixelHeight);
+        [panelItems addObject:makeRow(mode, isCurrent, mode, @"bolt.fill")];
+    }
+
+    if (panelItems.count > 0) {
+        NSMenuItem *h = [[NSMenuItem alloc]
+            initWithTitle:@"From panel modes" action:nil keyEquivalent:@""];
+        h.enabled = NO;
+        [submenu addItem:h];
+        [submenu addItem:[NSMenuItem separatorItem]];
+        for (NSMenuItem *i in panelItems) [submenu addItem:i];
+    }
+
+    // Common HiDPI presets: logical sizes not in the panel's mode list. The
+    // virtual-display pipeline renders at the preset, and macOS mirror-scales
+    // onto whatever panel mode lands closest. Synthetic DDDisplayMode with
+    // modeRef=NULL so forceHiDPIForDisplay:atMode:completion: skips the
+    // panel mode switch.
+    NSMutableSet<NSString *> *panelPixelKeys = [NSMutableSet set];
+    for (DDDisplayMode *mode in candidates) {
+        [panelPixelKeys addObject:
             [NSString stringWithFormat:@"%zu_%zu", mode.pixelWidth, mode.pixelHeight]];
     }
 
-    // Pre-index candidate pixel sizes so we can check, for each common preset,
-    // whether the panel has an exact 2×target match (→ pixel-perfect) or will
-    // require mirror scaling (→ softness). Lets us label each row honestly.
-    NSMutableSet<NSString *> *candidatePixelKeys = [NSMutableSet set];
-    for (DDDisplayMode *mode in candidates) {
-        [candidatePixelKeys addObject:
-            [NSString stringWithFormat:@"%zu_%zu", mode.pixelWidth, mode.pixelHeight]];
-    }
-
+    NSMutableArray<NSMenuItem *> *customItems = [NSMutableArray array];
     for (size_t i = 0; i < kCommonHiDPICount; i++) {
         size_t pw = kCommonHiDPIResolutions[i].w;
         size_t ph = kCommonHiDPIResolutions[i].h;
         NSString *key = [NSString stringWithFormat:@"%zu_%zu", pw, ph];
-        if ([advertisedKeys containsObject:key]) continue;
+        if ([panelPixelKeys containsObject:key]) continue;
 
         DDDisplayMode *synthetic = [[DDDisplayMode alloc] init];
         synthetic.pixelWidth    = pw;
@@ -488,42 +452,21 @@ static const size_t kCommonHiDPICount =
         synthetic.isHiDPI       = NO;
         synthetic.modeRef       = NULL;
 
-        NSString *doubleKey = [NSString stringWithFormat:@"%zu_%zu", pw * 2, ph * 2];
-        BOOL pixelPerfect = [candidatePixelKeys containsObject:doubleKey];
-
-        NSString *pixelStr = [[NSString stringWithFormat:@"%zu \u00D7 %zu", pw, ph]
-                              stringByPaddingToLength:kPixelColWidth
-                                          withString:@" " startingAtIndex:0];
-        NSString *gap = [@"" stringByPaddingToLength:kHzColWidth
-                                           withString:@" " startingAtIndex:0];
-        NSString *line = [NSString stringWithFormat:@"%@%@\u2295 custom%@",
-                          pixelStr, gap,
-                          pixelPerfect ? @"" : @" (scaled)"];
-
         BOOL isCurrent = (currentlyForced &&
                           currentlyForced.pixelWidth  == pw &&
                           currentlyForced.pixelHeight == ph);
-
-        NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:line
-                   action:isCurrent ? nil : @selector(forceHiDPIAtMode:)
-            keyEquivalent:@""];
-        item.target = self;
-        item.enabled = !isCurrent;
-        item.representedObject = @{ @"displayID": @(displayID), @"mode": synthetic };
-        item.attributedTitle = [[NSAttributedString alloc]
-            initWithString:line
-                attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
-        if (isCurrent) item.state = NSControlStateValueOn;
-        [submenu addItem:item];
+        [customItems addObject:makeRow(synthetic, isCurrent, synthetic, @"plus.square.fill")];
     }
 
-    [submenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *legend = [[NSMenuItem alloc]
-        initWithTitle:@"\u26A1 force  \u2014  \u2295 custom (virtual-only)"
-               action:nil keyEquivalent:@""];
-    legend.enabled = NO;
-    [submenu addItem:legend];
+    if (customItems.count > 0) {
+        if (panelItems.count > 0) [submenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *h = [[NSMenuItem alloc]
+            initWithTitle:@"Custom sizes" action:nil keyEquivalent:@""];
+        h.enabled = NO;
+        [submenu addItem:h];
+        [submenu addItem:[NSMenuItem separatorItem]];
+        for (NSMenuItem *i in customItems) [submenu addItem:i];
+    }
 
     return submenu;
 }
@@ -633,22 +576,11 @@ static const size_t kCommonHiDPICount =
     NSFont *mono     = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     NSFont *monoBold = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
 
-    // Find the panel-native pixel backing so we can classify every other mode
-    // relative to it ("More Space" when scaled above, "Larger Text" when
-    // scaled below, "Default" when it IS the native one). Modes whose pixel
-    // count equals the logical (Standard variants) are tagged "Full pixel"
-    // regardless of where they sit relative to native — they're a qualitative
-    // difference (no 2× supersample), not a position on the scale axis.
-    size_t nativePW = 0;
-    for (DDDisplayMode *m in modes) {
-        if (m.isDefaultForDisplay && m.isHiDPI) { nativePW = m.pixelWidth; break; }
-    }
-
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"" action:nil keyEquivalent:@""];
     NSString *headerLine = [NSString stringWithFormat:@"%@%@%@",
         [@"Looks Like" stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0],
-        [@"Type"       stringByPaddingToLength:kModeColLabel   withString:@" " startingAtIndex:0],
+        [@"Type"       stringByPaddingToLength:kModeColType    withString:@" " startingAtIndex:0],
         @"Rate"];
     header.attributedTitle = [[NSAttributedString alloc]
         initWithString:headerLine
@@ -666,24 +598,11 @@ static const size_t kCommonHiDPICount =
             mode.logicalWidth, mode.logicalHeight]
             stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0];
 
-        // Semantic label, System Settings-style.
-        NSString *label;
-        if (!mode.isHiDPI) {
-            label = @"Full pixel";
-        } else if (mode.isDefaultForDisplay) {
-            label = @"Default \u2605";
-        } else if (nativePW > 0 && mode.pixelWidth > nativePW) {
-            label = @"More Space";
-        } else if (nativePW > 0 && mode.pixelWidth < nativePW) {
-            label = @"Larger Text";
-        } else {
-            label = @"HiDPI";  // no native identified, or equal-pixel variant
-        }
-        NSString *labelCol = [label stringByPaddingToLength:kModeColLabel
-                                                  withString:@" " startingAtIndex:0];
+        NSString *typeCol = [(mode.isHiDPI ? @"HiDPI" : @"Standard")
+            stringByPaddingToLength:kModeColType withString:@" " startingAtIndex:0];
 
         NSString *line = [NSString stringWithFormat:@"%@%@%@",
-                          logicalCol, labelCol, rateStr];
+                          logicalCol, typeCol, rateStr];
 
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:line
@@ -699,21 +618,22 @@ static const size_t kCommonHiDPICount =
             initWithString:line
                 attributes:@{NSFontAttributeName: mode.isCurrent ? monoBold : mono}];
         if (mode.isCurrent) item.state = NSControlStateValueOn;
+        // Panel-native mode: star icon in the menu's image slot (decoupled
+        // from the title text so monospace alignment stays clean).
+        if (mode.isDefaultForDisplay) {
+            item.image = [NSImage imageWithSystemSymbolName:@"star.fill"
+                                   accessibilityDescription:@"panel-native"];
+        }
         [submenu addItem:item];
     }
 
     [submenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *countItem = [[NSMenuItem alloc]
-        initWithTitle:[NSString stringWithFormat:@"%lu modes \u2014 click to switch",
-                       (unsigned long)modes.count]
-               action:nil keyEquivalent:@""];
-    countItem.enabled = NO;
-    [submenu addItem:countItem];
-
     NSMenuItem *legend = [[NSMenuItem alloc]
-        initWithTitle:@"Default \u2605 = panel-native (no scaling, crispest)"
+        initWithTitle:@"panel-native (no scaling, crispest)"
                action:nil keyEquivalent:@""];
     legend.enabled = NO;
+    legend.image = [NSImage imageWithSystemSymbolName:@"star.fill"
+                           accessibilityDescription:nil];
     [submenu addItem:legend];
 
     return submenu;

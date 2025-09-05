@@ -679,8 +679,11 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
                   completion:(DDForceHiDPICompletion)completion {
     // Gate coalesced reconfig handler and VD termination handler off for
     // the duration of the apply (see `applyingForce` doc). The `deliver`
-    // wrapper below clears the gate and flushes any deferred termination
-    // that accumulated during the apply.
+    // wrapper clears the gate and flushes any deferred termination that
+    // accumulated during the apply; the @try/@finally below is an
+    // exception-safety backstop so the gate can't stay wedged at YES if
+    // anything in the pipeline raises an ObjC exception before deliver
+    // gets called.
     self.applyingForce = YES;
     __weak __typeof(self) weakSelf = self;
     DDForceHiDPICompletion deliver = ^(BOOL success, NSError *error) {
@@ -695,6 +698,8 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
         if (!completion) return;
         dispatch_async(dispatch_get_main_queue(), ^{ completion(success, error); });
     };
+
+    @try {
 
     if (!NSClassFromString(@"CGVirtualDisplay")) {
         deliver(NO, ddMakeError(DDErrorRequiresMacOS14,
@@ -985,6 +990,20 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
     NSLog(@"DisplayDisabler: Forced HiDPI for display 0x%X at %zu\u00D7%zu via virtual 0x%X",
           displayID, targetLogicalWidth, targetLogicalHeight, virtualID);
     deliver(YES, nil);
+
+    } @finally {
+        // Backstop: deliver() always clears applyingForce in the normal
+        // return paths. If an ObjC exception unwound out of the pipeline
+        // before any deliver call, clear it here so future forces, prunes,
+        // realigns, and VD-termination handlers aren't frozen in the gate.
+        if (self.applyingForce) {
+            self.applyingForce = NO;
+            if (self.vdTerminationDeferred) {
+                self.vdTerminationDeferred = NO;
+                [self handleSharedVirtualDisplayTerminated];
+            }
+        }
+    }
 }
 
 - (BOOL)matchGammaFromDisplay:(CGDirectDisplayID)source toDisplay:(CGDirectDisplayID)target {
