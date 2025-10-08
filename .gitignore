@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Compiled binaries (optional - you may want to include the binary)
+# display_disable
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj/
