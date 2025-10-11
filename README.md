@@ -1,178 +1,135 @@
-# DisplayDisabler - Lightweight Alternative to BetterDisplay
+# DisplayDisabler — Lightweight Display Manager for macOS
 
-**Reverse-engineered from BetterDisplay's display disable functionality**
+A minimal, open-source menu bar app that disables your MacBook's built-in display when using external monitors. Uses the same private CoreGraphics API as BetterDisplay, in a ~100KB app with zero background overhead.
 
-## Overview
-A minimal, open-source tool that uses the same private CoreGraphics API as BetterDisplay to disable your MacBook's built-in display. Perfect for headless setups with external monitors.
+## Install
 
-## Features
-- ✅ **Lightweight**: Single 50KB binary vs 30MB app
-- ✅ **No background process**: Only runs when needed
-- ✅ **Open source**: Full source code included
-- ✅ **Same functionality**: Uses identical API to BetterDisplay
-- ✅ **Auto-run on login**: Optional LaunchAgent
-- ✅ **Complete control**: Easy to audit and modify
-
-## Files Included
-- `display_disable.m` - Source code (Objective-C)
-- `display_disable` - Compiled binary
-- `auto_disable_builtin.sh` - Automation script
-- `com.user.displaydisabler.plist` - LaunchAgent configuration
-- `INSTALL.md` - Installation instructions
-- `README.md` - This file
-
-## Quick Start
-
-### Option 1: Manual Installation
 ```bash
-# 1. Create bin directory
-mkdir -p ~/bin
-
-# 2. Copy tool
-cp display_disable ~/bin/
-chmod +x ~/bin/display_disable
-
-# 3. Test it
-~/bin/display_disable list
-~/bin/display_disable disable-builtin
+make
 ```
 
-### Option 2: Automatic Installation
+Then drag `DisplayDisabler.app` to `/Applications`. That's it.
+
+Or use the shortcut:
+
 ```bash
-# Run the installation script
-./install.sh
+make install
+```
+
+## What It Does
+
+Click the display icon in your menu bar to:
+
+- **See all displays** — names, status, resolution, refresh rate, HiDPI info
+- **Disable / Enable** any display with one click
+- **Browse all resolutions** — including every HiDPI (Retina) mode
+- **Auto-disable built-in** when an external monitor is connected
+- **Launch at Login** — starts silently in the menu bar
+
+No dock icon. No terminal. No scripts. Just a clean menu bar utility.
+
+## Menu Bar
+
+```
+DisplayDisabler v3.0
+1 online, 1 active
+─────────────────────────────────────────────
+● Built-in Display — 0x1
+  active  │  built-in  │  main
+  3024 × 1964 @2x  120Hz
+  ▶ All Resolutions              → submenu
+  Disable This Display
+─────────────────────────────────────────────
+▶ Settings
+  ├── ☑ Auto-disable built-in
+  ├── ☑ Auto-re-enable built-in
+  ├── ☑ Notifications
+  ├── ☐ Ask before disabling
+  ├── ☑ Show all resolutions
+  └── ☐ Launch at Login
+─────────────────────────────────────────────
+Quit DisplayDisabler                      ⌘Q
+```
+
+The **All Resolutions** submenu shows every available display mode — HiDPI and standard — with pixel dimensions, logical dimensions, scale factor, and refresh rate. All settings are toggleable and persist across app restarts.
+
+## Build from Source
+
+Requires Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+make            # build DisplayDisabler.app
+make install    # copy to /Applications
+make clean      # remove build artifacts
+make uninstall  # remove from /Applications
+```
+
+### Compilation details
+
+```bash
+clang -fobjc-arc -Wall -O2 -mmacosx-version-min=13.0 \
+      -framework Cocoa -framework CoreGraphics -framework IOKit \
+      -framework ServiceManagement -framework UserNotifications \
+      main.m AppDelegate.m DisplayManager.m -o DisplayDisabler
 ```
 
 ## How It Works
 
-The tool uses Apple's private CoreGraphics Services API:
+The core functionality uses Apple's private CoreGraphics API:
 
 ```objc
-CGDisplayConfigRef config;
 CGBeginDisplayConfiguration(&config);
-CGSConfigureDisplayEnabled(config, displayID, false);
+CGSConfigureDisplayEnabled(config, displayID, false);  // private API
 CGCompleteDisplayConfiguration(config, kCGConfigurePermanently);
 ```
 
-This is **exactly** what BetterDisplay does internally.
+This is exactly what BetterDisplay does internally.
 
-## Advantages Over BetterDisplay
+The app monitors display changes via `CGDisplayRegisterReconfigurationCallback` and auto-refreshes the menu when you plug/unplug monitors.
 
-| Feature | DisplayDisabler | BetterDisplay |
-|---------|----------------|---------------|
-| **Size** | ~50KB | ~30MB |
-| **Background Process** | No | Yes (always running) |
-| **Open Source** | ✅ Yes | ❌ No |
-| **Dependencies** | None | Many frameworks |
-| **CPU Usage** | 0% (only runs on login) | ~0.5% (always) |
-| **Memory Usage** | 0MB (not resident) | ~120MB |
-| **Auto-disable built-in** | ✅ Yes | ✅ Yes |
-| **Other features** | - | HDR, DDC, etc. |
+## vs BetterDisplay
 
-## Use Cases
+| | DisplayDisabler | BetterDisplay |
+|---|---|---|
+| **App size** | ~100KB | ~30MB |
+| **Memory** | ~5MB | ~120MB |
+| **Background CPU** | 0% | ~0.5% |
+| **Open source** | Yes | No |
+| **HiDPI mode listing** | Yes | Yes |
+| **Auto-disable built-in** | Yes | Yes |
+| **Launch at Login** | Yes | Yes |
+| **HDR / DDC control** | No | Yes |
+| **GUI settings** | Menu bar | Full GUI |
 
-### Perfect For:
-- Headless MacBook setups
-- Broken/removed internal displays
-- Minimalist system configurations
-- Users who only need display disable feature
+## Requirements
 
-### Keep BetterDisplay If:
-- You need HDR control
-- You use DDC brightness control
-- You want GUI configuration
-- You use other BetterDisplay features
+- macOS 13+ (Ventura or later)
+- Apple Silicon or Intel Mac
 
-## Technical Details
+## Files
 
-### API Used
-- `CGSConfigureDisplayEnabled()` - Private CoreGraphics API
-- `CGBeginDisplayConfiguration()` - Start config transaction
-- `CGCompleteDisplayConfiguration()` - Commit changes
+| File | Purpose |
+|---|---|
+| `main.m` | App entry point |
+| `AppDelegate.h/m` | Menu bar UI, settings, auto-disable logic |
+| `DisplayManager.h/m` | Display query, enable/disable, mode listing, monitoring |
+| `Info.plist` | App bundle metadata |
+| `Makefile` | Build system |
+| `display_disable.m` | Original CLI tool (archived reference) |
 
-### Compilation
-```bash
-clang -framework CoreGraphics -framework Foundation display_disable.m -o display_disable
-```
+## Security
 
-### Persistence
-The LaunchAgent (`com.user.displaydisabler.plist`) runs the script on every login, checking for external displays and automatically disabling the built-in display if found.
-
-## Security & Privacy
-
-**Is this safe?**
-- ✅ Uses official (though private) Apple APIs
-- ✅ No network access
-- ✅ No data collection
-- ✅ Source code fully auditable
-- ✅ Does NOT require SIP disabled
-- ✅ Does NOT modify system files
-
-**Private API risks:**
-- ⚠️ Could break in future macOS updates (same as BetterDisplay)
-- ⚠️ Apple could remove/change the API
-- ⚠️ Not officially supported
-
-## Troubleshooting
-
-### Display not disabling?
-```bash
-# Check if tool works
-~/bin/display_disable list
-
-# Try manual disable
-~/bin/display_disable disable-builtin
-
-# Check LaunchAgent logs
-cat /tmp/displaydisabler.log
-```
-
-### Re-enable display?
-```bash
-# Get display ID first
-~/bin/display_disable list
-
-# Enable by ID (example)
-~/bin/display_disable enable 0x2
-```
-
-### LaunchAgent not running?
-```bash
-# Load it manually
-launchctl load ~/Library/LaunchAgents/com.user.displaydisabler.plist
-
-# Check status
-launchctl list | grep displaydisabler
-```
-
-## Uninstallation
-```bash
-# Remove LaunchAgent
-launchctl unload ~/Library/LaunchAgents/com.user.displaydisabler.plist
-rm ~/Library/LaunchAgents/com.user.displaydisabler.plist
-
-# Remove binaries
-rm ~/bin/display_disable
-rm ~/bin/auto_disable_builtin.sh
-
-# Remove this directory
-rm -rf ~/Documents/DisplayDisabler
-```
-
-## Credits
-- Reverse-engineered from BetterDisplay behavior
-- Private API research by the macOS community
-- Inspired by the need for lightweight system tools
+- Uses official (though private) Apple APIs
+- No network access, no data collection
+- Source code fully auditable
+- Does NOT require SIP disabled or root access
+- Ad-hoc code signed (works locally, not notarized for distribution)
 
 ## License
-MIT License - Feel free to modify and distribute
 
-## Disclaimer
-This tool uses private Apple APIs that are not officially documented or supported. Use at your own risk. The author is not responsible for any issues that may arise from using this tool.
+MIT License — see [LICENSE](LICENSE)
 
 ---
 
-**Version**: 1.0.0  
-**Compatible with**: macOS 11+ (Big Sur and later), Apple Silicon  
-**Tested on**: M3 MacBook Air, macOS Sonnet 15.2  
-**Last Updated**: 2025-10-08
+**Version**: 3.0.0
+**Compatible with**: macOS 13+ (Ventura and later), Apple Silicon & Intel
