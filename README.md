@@ -23,6 +23,7 @@ Click the display icon in your menu bar to:
 - **See all displays** — names, status, resolution, refresh rate, HiDPI info
 - **Disable / Enable** any display with one click
 - **Browse all resolutions** — including every HiDPI (Retina) mode
+- **Force HiDPI** on non-Retina displays via virtual display mirroring (macOS 14+)
 - **Auto-disable built-in** when an external monitor is connected
 - **Launch at Login** — starts silently in the menu bar
 
@@ -38,6 +39,7 @@ DisplayDisabler v3.0
   active  │  built-in  │  main
   3024 × 1964 @2x  120Hz
   ▶ All Resolutions              → submenu
+  Force HiDPI                      (if no native HiDPI, macOS 14+)
   Disable This Display
 ─────────────────────────────────────────────
 ▶ Settings
@@ -84,7 +86,9 @@ CGCompleteDisplayConfiguration(config, kCGConfigurePermanently);
 
 This is exactly what BetterDisplay does internally.
 
-The app monitors display changes via `CGDisplayRegisterReconfigurationCallback` and auto-refreshes the menu when you plug/unplug monitors.
+Force HiDPI works by creating a `CGVirtualDisplay` (private API, macOS 14+) with HiDPI enabled, then mirroring the physical display through it via `CGConfigureDisplayMirrorOfDisplay`.
+
+The app monitors display changes via `CGDisplayRegisterReconfigurationCallback` and `NSApplicationDidChangeScreenParametersNotification`, and auto-refreshes the menu when you plug/unplug monitors.
 
 ## vs BetterDisplay
 
@@ -95,6 +99,7 @@ The app monitors display changes via `CGDisplayRegisterReconfigurationCallback` 
 | **Background CPU** | 0% | ~0.5% |
 | **Open source** | Yes | No |
 | **HiDPI mode listing** | Yes | Yes |
+| **Force HiDPI** | Yes (macOS 14+) | Yes |
 | **Auto-disable built-in** | Yes | Yes |
 | **Launch at Login** | Yes | Yes |
 | **HDR / DDC control** | No | Yes |
@@ -111,10 +116,9 @@ The app monitors display changes via `CGDisplayRegisterReconfigurationCallback` 
 |---|---|
 | `main.m` | App entry point |
 | `AppDelegate.h/m` | Menu bar UI, settings, auto-disable logic |
-| `DisplayManager.h/m` | Display query, enable/disable, mode listing, monitoring |
+| `DisplayManager.h/m` | Display query, enable/disable, mode listing, HiDPI forcing, monitoring |
 | `Info.plist` | App bundle metadata |
 | `Makefile` | Build system |
-| `display_disable.m` | Original CLI tool (archived reference) |
 
 ## Security
 

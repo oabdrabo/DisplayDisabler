@@ -38,6 +38,7 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
     [self.displayManager startMonitoringWithChangeHandler:^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        [strongSelf.displayManager pruneStaleVirtualDisplays];
         [strongSelf rebuildMenu];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
@@ -47,6 +48,7 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
 }
 
@@ -181,7 +183,7 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
         // Resolution line
         NSString *resStr;
         if (display.isHiDPI && display.logicalWidth > 0) {
-            resStr = [NSString stringWithFormat:@"    %zu \u00D7 %zu @%zdx  %.0fHz",
+            resStr = [NSString stringWithFormat:@"    %zu \u00D7 %zu @%zux  %.0fHz",
                       display.pixelWidth, display.pixelHeight,
                       display.pixelWidth / display.logicalWidth,
                       display.refreshRate];
@@ -200,6 +202,30 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
                 initWithTitle:@"    All Resolutions" action:nil keyEquivalent:@""];
             modesItem.submenu = [self buildModesSubmenuForDisplay:display.displayID];
             [menu addItem:modesItem];
+        }
+
+        // Force HiDPI (only for displays without native HiDPI modes)
+        BOOL hiDPIForced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+        if (hiDPIForced) {
+            [self addItemToMenu:menu
+                          title:@"    \u26A1 HiDPI forced (via virtual display)"
+                         action:nil enabled:NO];
+            NSMenuItem *stopItem = [[NSMenuItem alloc]
+                initWithTitle:@"    Stop Forced HiDPI"
+                       action:@selector(stopForcedHiDPI:)
+                keyEquivalent:@""];
+            stopItem.target = self;
+            stopItem.tag = (NSInteger)display.displayID;
+            [menu addItem:stopItem];
+        } else if (!display.hasNativeHiDPIModes &&
+                   NSClassFromString(@"CGVirtualDisplay")) {
+            NSMenuItem *forceItem = [[NSMenuItem alloc]
+                initWithTitle:@"    Force HiDPI"
+                       action:@selector(forceHiDPI:)
+                keyEquivalent:@""];
+            forceItem.target = self;
+            forceItem.tag = (NSInteger)display.displayID;
+            [menu addItem:forceItem];
         }
 
         // Disable button
@@ -319,10 +345,8 @@ static const CGFloat kSwitchRowPad    = 18;
     sw.action = @selector(loginSwitchToggled:);
     sw.identifier = @"LaunchAtLogin";
 
-    if (@available(macOS 13.0, *)) {
-        sw.state = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled)
-                   ? NSControlStateValueOn : NSControlStateValueOff;
-    }
+    sw.state = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled)
+               ? NSControlStateValueOn : NSControlStateValueOff;
 
     [row addSubview:sw];
     item.view = row;
@@ -342,7 +366,7 @@ static const CGFloat kSwitchRowPad    = 18;
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"" action:nil keyEquivalent:@""];
     header.attributedTitle = [[NSAttributedString alloc]
-        initWithString:@"Pixels           Looks Like       Scale  Rate"
+        initWithString:@"Pixels           Looks Like       Type      Rate"
             attributes:@{NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11
                                                 weight:NSFontWeightBold]}];
     header.enabled = NO;
@@ -350,16 +374,16 @@ static const CGFloat kSwitchRowPad    = 18;
     [submenu addItem:[NSMenuItem separatorItem]];
 
     for (DDDisplayMode *mode in modes) {
-        NSString *scaleStr = mode.isHiDPI ? @"2x" : @"1x";
+        NSString *typeStr = mode.isHiDPI ? @"HiDPI" : @"Standard";
         NSString *rateStr  = mode.refreshRate > 0
             ? [NSString stringWithFormat:@"%.0fHz", mode.refreshRate] : @"--";
 
-        NSString *line = [NSString stringWithFormat:@"%-17s%-17s%-7s%@",
+        NSString *line = [NSString stringWithFormat:@"%-17s%-17s%-10s%@",
             [[NSString stringWithFormat:@"%zu \u00D7 %zu",
               mode.pixelWidth, mode.pixelHeight] UTF8String],
             [[NSString stringWithFormat:@"%zu \u00D7 %zu",
               mode.logicalWidth, mode.logicalHeight] UTF8String],
-            [scaleStr UTF8String],
+            [typeStr UTF8String],
             rateStr];
 
         NSMenuItem *item = [[NSMenuItem alloc]
@@ -447,6 +471,8 @@ static const CGFloat kSwitchRowPad    = 18;
                           body:[NSString stringWithFormat:@"0x%X has been disabled.", did]];
     } else {
         NSLog(@"DisplayDisabler: Failed to disable 0x%X: %@", did, error);
+        [self postNotification:@"Disable Failed"
+                          body:error.localizedDescription ?: @"Unknown error"];
     }
 }
 
@@ -458,6 +484,40 @@ static const CGFloat kSwitchRowPad    = 18;
                           body:[NSString stringWithFormat:@"0x%X has been enabled.", did]];
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
+        [self postNotification:@"Enable Failed"
+                          body:error.localizedDescription ?: @"Unknown error"];
+    }
+}
+
+- (void)forceHiDPI:(NSMenuItem *)sender {
+    CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    NSError *error = nil;
+    if ([self.displayManager forceHiDPIForDisplay:did error:&error]) {
+        [self postNotification:@"HiDPI Forced"
+                          body:[NSString stringWithFormat:
+                                @"HiDPI enabled for %@ via virtual display.", name]];
+        [self rebuildMenu];
+    } else {
+        NSLog(@"DisplayDisabler: Failed to force HiDPI for 0x%X: %@", did, error);
+        [self postNotification:@"Force HiDPI Failed"
+                          body:error.localizedDescription ?: @"Unknown error"];
+    }
+}
+
+- (void)stopForcedHiDPI:(NSMenuItem *)sender {
+    CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    NSError *error = nil;
+    if ([self.displayManager stopForcedHiDPIForDisplay:did error:&error]) {
+        [self postNotification:@"HiDPI Stopped"
+                          body:[NSString stringWithFormat:
+                                @"Restored native rendering for %@.", name]];
+        [self rebuildMenu];
+    } else {
+        NSLog(@"DisplayDisabler: Failed to stop forced HiDPI for 0x%X: %@", did, error);
     }
 }
 
@@ -472,27 +532,25 @@ static const CGFloat kSwitchRowPad    = 18;
 }
 
 - (void)loginSwitchToggled:(NSSwitch *)sender {
-    if (@available(macOS 13.0, *)) {
-        SMAppService *service = [SMAppService mainAppService];
-        NSError *error = nil;
+    SMAppService *service = [SMAppService mainAppService];
+    NSError *error = nil;
 
-        if (service.status == SMAppServiceStatusEnabled) {
-            [service unregisterAndReturnError:&error];
-            if (error)
-                NSLog(@"DisplayDisabler: Failed to unregister login item: %@", error);
-        } else {
-            BOOL success = [service registerAndReturnError:&error];
-            if (!success) {
-                NSLog(@"DisplayDisabler: Failed to register login item: %@", error);
-                if (service.status == SMAppServiceStatusRequiresApproval) {
-                    [SMAppService openSystemSettingsLoginItems];
-                }
+    if (service.status == SMAppServiceStatusEnabled) {
+        [service unregisterAndReturnError:&error];
+        if (error)
+            NSLog(@"DisplayDisabler: Failed to unregister login item: %@", error);
+    } else {
+        BOOL success = [service registerAndReturnError:&error];
+        if (!success) {
+            NSLog(@"DisplayDisabler: Failed to register login item: %@", error);
+            if (service.status == SMAppServiceStatusRequiresApproval) {
+                [SMAppService openSystemSettingsLoginItems];
             }
         }
-
-        sender.state = (service.status == SMAppServiceStatusEnabled)
-                       ? NSControlStateValueOn : NSControlStateValueOff;
     }
+
+    sender.state = (service.status == SMAppServiceStatusEnabled)
+                   ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 // ── Checkmark setting actions ────────────────────────────────────────────────

@@ -9,9 +9,6 @@
 DisplayDisabler
 DisplayDisabler.app/
 
-# Old CLI binary
-display_disable
-
 # Logs
 *.log
 
