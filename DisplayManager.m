@@ -9,9 +9,16 @@
 #import <IOKit/graphics/IOGraphicsLib.h>
 #include <math.h>
 
-#define MAX_DISPLAYS 16
+NSErrorDomain const DDErrorDomain = @"com.local.DisplayDisabler";
 
-static NSString * const kDDErrorDomain = @"com.local.DisplayDisabler";
+// ── Tunables ────────────────────────────────────────────────────────────────
+
+// Debounce reconfiguration bursts; macOS often emits several in quick succession.
+static const NSTimeInterval kDDCoalesceInterval = 0.5;
+
+// Timeout while polling for a freshly-created virtual display to appear in
+// CGGetOnlineDisplayList. Beyond this we give up and report the failure.
+static const NSTimeInterval kDDVirtualOnlineTimeout = 5.0;
 
 // ── CGVirtualDisplay private API (macOS 14+, resolved at runtime) ───────────
 
@@ -46,16 +53,42 @@ static NSString * const kDDErrorDomain = @"com.local.DisplayDisabler";
 @property (nonatomic, readonly) CGDirectDisplayID displayID;
 @end
 
-// ── Error helper ────────────────────────────────────────────────────────────
+// ── Error helpers ───────────────────────────────────────────────────────────
 
-static NSError *ddError(NSInteger code, NSString *format, ...) NS_FORMAT_FUNCTION(2,3);
-static NSError *ddError(NSInteger code, NSString *format, ...) {
+static NSError *ddMakeError(DDErrorCode code, NSString *format, ...) NS_FORMAT_FUNCTION(2,3);
+static NSError *ddMakeError(DDErrorCode code, NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    return [NSError errorWithDomain:kDDErrorDomain code:code
+    return [NSError errorWithDomain:DDErrorDomain code:code
                  userInfo:@{NSLocalizedDescriptionKey: msg}];
+}
+
+static NSError *ddMakeCGError(CGError cgError, NSString *phase) {
+    return [NSError errorWithDomain:DDErrorDomain
+                               code:DDErrorCGConfigFailed
+                           userInfo:@{
+        NSLocalizedDescriptionKey:
+            [NSString stringWithFormat:@"%@ (CGError %d).", phase, cgError],
+    }];
+}
+
+// ── Display-list helpers (dynamic size — no silent truncation) ──────────────
+
+typedef CGError (*DDDisplayListFn)(uint32_t, CGDirectDisplayID *, uint32_t *);
+
+static NSArray<NSNumber *> *ddQueryDisplayList(DDDisplayListFn fn) {
+    uint32_t count = 0;
+    if (fn(0, NULL, &count) != kCGErrorSuccess || count == 0) return @[];
+    CGDirectDisplayID *buf = calloc(count, sizeof *buf);
+    if (!buf) return @[];
+    CGError err = fn(count, buf, &count);
+    if (err != kCGErrorSuccess) { free(buf); return @[]; }
+    NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:count];
+    for (uint32_t i = 0; i < count; i++) [out addObject:@(buf[i])];
+    free(buf);
+    return out;
 }
 
 // ── Model implementations ───────────────────────────────────────────────────
@@ -66,10 +99,9 @@ static NSError *ddError(NSInteger code, NSString *format, ...) {
 @implementation DDDisplayMode
 
 - (void)setModeRef:(CGDisplayModeRef)modeRef {
-    if (_modeRef != modeRef) {
-        if (_modeRef) CGDisplayModeRelease(_modeRef);
-        _modeRef = modeRef ? CGDisplayModeRetain(modeRef) : NULL;
-    }
+    if (_modeRef == modeRef) return;
+    if (_modeRef) CGDisplayModeRelease(_modeRef);
+    _modeRef = modeRef ? CGDisplayModeRetain(modeRef) : NULL;
 }
 
 - (void)dealloc {
@@ -86,8 +118,17 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 @property (nonatomic, copy) DisplayChangeBlock changeHandler;
 @property (nonatomic) NSInteger coalesceToken;
 @property (nonatomic) BOOL monitoring;
+// One virtual display per physical, kept alive for the process lifetime once
+// created. CGVirtualDisplay on macOS 13–26 does not reliably tear down after
+// being mirrored; a subsequent create+mirror fails with CGError 1001. The
+// only robust pattern is "create once, reuse forever". See probe evidence.
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, CGVirtualDisplay *> *virtualDisplays;
+// Target mode currently forced per physical, or absent when not forced.
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, DDDisplayMode *> *forceActiveTargets;
+// Panel mode captured before the first force, used to restore on stop.
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, DDDisplayMode *> *preForceModes;
 - (void)scheduleChangeNotification;
+- (void)handleVirtualDisplayTerminated:(CGDirectDisplayID)physicalID;
 @end
 
 static void displayReconfigCallback(CGDirectDisplayID display __unused,
@@ -105,7 +146,9 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _virtualDisplays = [NSMutableDictionary dictionary];
+        _virtualDisplays     = [NSMutableDictionary dictionary];
+        _forceActiveTargets  = [NSMutableDictionary dictionary];
+        _preForceModes       = [NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -126,37 +169,43 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     CGDisplayConfigRef config;
     CGError err = CGBeginDisplayConfiguration(&config);
     if (err != kCGErrorSuccess) {
-        if (error) *error = ddError(err, @"Failed to begin display configuration (error %d)", err);
+        if (error) *error = ddMakeCGError(err, @"Failed to begin display configuration");
         return NO;
     }
 
     err = block(config);
     if (err != kCGErrorSuccess) {
         CGCancelDisplayConfiguration(config);
-        if (error) *error = ddError(err, @"Display configuration step failed (error %d)", err);
+        if (error) *error = ddMakeCGError(err, @"Display configuration step failed");
         return NO;
     }
 
     err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     if (err != kCGErrorSuccess) {
         CGCancelDisplayConfiguration(config);
-        if (error) *error = ddError(err, @"Failed to commit display configuration (error %d)", err);
+        if (error) *error = ddMakeCGError(err, @"Failed to commit display configuration");
         return NO;
     }
 
     return YES;
 }
 
-// ── Virtual display ID set ──────────────────────────────────────────────────
-// Snapshot of display IDs owned by our virtual displays, for filtering.
+// ── Virtual display bookkeeping ─────────────────────────────────────────────
 
-- (NSSet<NSNumber *> *)virtualDisplayIDSet {
-    NSMutableSet *ids = [NSMutableSet setWithCapacity:self.virtualDisplays.count];
-    for (NSNumber *key in self.virtualDisplays) {
-        CGVirtualDisplay *vd = self.virtualDisplays[key];
-        if (vd) [ids addObject:@(vd.displayID)];
+- (BOOL)isVirtualDisplayID:(CGDirectDisplayID)displayID {
+    for (CGVirtualDisplay *vd in self.virtualDisplays.allValues) {
+        if (vd.displayID == displayID) return YES;
     }
-    return ids;
+    return NO;
+}
+
+- (void)handleVirtualDisplayTerminated:(CGDirectDisplayID)physicalID {
+    if (!self.virtualDisplays[@(physicalID)]) return;
+    [self.virtualDisplays    removeObjectForKey:@(physicalID)];
+    [self.forceActiveTargets removeObjectForKey:@(physicalID)];
+    [self.preForceModes      removeObjectForKey:@(physicalID)];
+    NSLog(@"DisplayDisabler: Virtual display for 0x%X terminated externally.", physicalID);
+    [self scheduleChangeNotification];
 }
 
 // ── Unmirror helper ─────────────────────────────────────────────────────────
@@ -164,7 +213,7 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 - (void)unmirrorDisplay:(CGDirectDisplayID)displayID {
     NSError *error = nil;
     BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-        return CGConfigureDisplayMirrorOfDisplay(config, displayID, 0);
+        return CGConfigureDisplayMirrorOfDisplay(config, displayID, kCGNullDirectDisplay);
     } error:&error];
     if (!ok) {
         NSLog(@"DisplayDisabler: Warning: failed to unmirror 0x%X: %@", displayID, error);
@@ -174,20 +223,21 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 // ── Display name via IOKit ──────────────────────────────────────────────────
 
 - (NSString *)nameForDisplayID:(CGDirectDisplayID)displayID {
-    io_iterator_t iter;
-    io_service_t serv;
+    NSString *defaultName = CGDisplayIsBuiltin(displayID) ? @"Built-in Display" : @"External Display";
 
     CFMutableDictionaryRef matching = IOServiceMatching("IODisplayConnect");
-    if (!matching ||
-        IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) != KERN_SUCCESS) {
-        return CGDisplayIsBuiltin(displayID) ? @"Built-in Display" : @"External Display";
+    if (!matching) return defaultName;
+
+    io_iterator_t iter = 0;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) != KERN_SUCCESS) {
+        return defaultName;
     }
 
     uint32_t targetVendor = CGDisplayVendorNumber(displayID);
     uint32_t targetModel  = CGDisplayModelNumber(displayID);
 
     NSString *result = nil;
-
+    io_service_t serv;
     while ((serv = IOIteratorNext(iter)) != 0) {
         NSDictionary *info = (__bridge_transfer NSDictionary *)
             IODisplayCreateInfoDictionary(serv, kIODisplayOnlyPreferredName);
@@ -199,8 +249,8 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         NSNumber *productID = info[@kDisplayProductID];
 
         if (vendorID && productID &&
-            [vendorID unsignedIntValue] == targetVendor &&
-            [productID unsignedIntValue] == targetModel) {
+            vendorID.unsignedIntValue == targetVendor &&
+            productID.unsignedIntValue == targetModel) {
 
             NSDictionary *names = info[@kDisplayProductName];
             if (names.count > 0) result = names.allValues.firstObject;
@@ -209,38 +259,28 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     }
     IOObjectRelease(iter);
 
-    if (result) return result;
-    return CGDisplayIsBuiltin(displayID) ? @"Built-in Display" : @"External Display";
+    return result ?: defaultName;
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
 
 - (NSArray<DDDisplayInfo *> *)allDisplays {
-    uint32_t activeCount = 0, onlineCount = 0;
-    CGDirectDisplayID active[MAX_DISPLAYS], online[MAX_DISPLAYS];
+    NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
+    if (online.count == 0) return @[];
 
-    if (CGGetActiveDisplayList(MAX_DISPLAYS, active, &activeCount) != kCGErrorSuccess)
-        activeCount = 0;
-    if (CGGetOnlineDisplayList(MAX_DISPLAYS, online, &onlineCount) != kCGErrorSuccess)
-        return @[];
+    NSSet<NSNumber *> *activeSet = [NSSet setWithArray:ddQueryDisplayList(CGGetActiveDisplayList)];
 
-    NSMutableSet *activeSet = [NSMutableSet set];
-    for (uint32_t i = 0; i < activeCount; i++)
-        [activeSet addObject:@(active[i])];
+    NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray arrayWithCapacity:online.count];
 
-    NSSet *virtualIDs = [self virtualDisplayIDSet];
-    NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
-
-    for (uint32_t i = 0; i < onlineCount; i++) {
-        CGDirectDisplayID did = online[i];
-        if ([virtualIDs containsObject:@(did)]) continue;
+    for (NSNumber *didNum in online) {
+        CGDirectDisplayID did = didNum.unsignedIntValue;
+        if ([self isVirtualDisplayID:did]) continue;
 
         DDDisplayInfo *info = [[DDDisplayInfo alloc] init];
-
         info.displayID = did;
         info.name      = [self nameForDisplayID:did];
         info.isBuiltIn = CGDisplayIsBuiltin(did);
-        info.isActive  = [activeSet containsObject:@(did)];
+        info.isActive  = [activeSet containsObject:didNum];
         info.isMain    = CGDisplayIsMain(did);
 
         if (info.isActive) {
@@ -254,9 +294,6 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
                 info.isHiDPI       = (info.pixelWidth > info.logicalWidth);
                 CGDisplayModeRelease(mode);
             }
-
-            CGSize mm = CGDisplayScreenSize(did);
-            info.physicalSizeMM = NSMakeSize(mm.width, mm.height);
             info.hasNativeHiDPIModes = [self displayHasNativeHiDPIModes:did];
         }
 
@@ -276,17 +313,19 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
     size_t curPW = 0, curPH = 0, curLW = 0, curLH = 0;
     double curRate = 0;
+    uint32_t curFlags = 0;
     if (curMode) {
-        curPW   = CGDisplayModeGetPixelWidth(curMode);
-        curPH   = CGDisplayModeGetPixelHeight(curMode);
-        curLW   = CGDisplayModeGetWidth(curMode);
-        curLH   = CGDisplayModeGetHeight(curMode);
-        curRate = CGDisplayModeGetRefreshRate(curMode);
+        curPW    = CGDisplayModeGetPixelWidth(curMode);
+        curPH    = CGDisplayModeGetPixelHeight(curMode);
+        curLW    = CGDisplayModeGetWidth(curMode);
+        curLH    = CGDisplayModeGetHeight(curMode);
+        curRate  = CGDisplayModeGetRefreshRate(curMode);
+        curFlags = CGDisplayModeGetIOFlags(curMode);
         CGDisplayModeRelease(curMode);
     }
 
     NSMutableArray<DDDisplayMode *> *result = [NSMutableArray array];
-    NSMutableSet *seen = [NSMutableSet set];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
 
     CFIndex count = CFArrayGetCount(allModes);
     for (CFIndex i = 0; i < count; i++) {
@@ -297,9 +336,13 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         size_t pw = CGDisplayModeGetPixelWidth(mode);
         size_t ph = CGDisplayModeGetPixelHeight(mode);
         double hz = CGDisplayModeGetRefreshRate(mode);
+        uint32_t flags = CGDisplayModeGetIOFlags(mode);
         BOOL hidpi = (pw > lw);
 
-        NSString *key = [NSString stringWithFormat:@"%zu_%zu_%zu_%zu_%.0f", pw, ph, lw, lh, hz];
+        // Dedup key includes IO flags so we don't collapse modes that differ by
+        // pixel encoding / stretching into a single visible row.
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu_%zu_%zu_%.2f_%u",
+                         pw, ph, lw, lh, hz, flags];
         if ([seen containsObject:key]) continue;
         [seen addObject:key];
 
@@ -313,6 +356,7 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         m.modeRef       = mode;
         m.isCurrent     = (pw == curPW && ph == curPH &&
                            lw == curLW && lh == curLH &&
+                           flags == curFlags &&
                            fabs(hz - curRate) < 1.0);
 
         [result addObject:m];
@@ -320,11 +364,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     CFRelease(allModes);
 
     [result sortUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
-        NSComparisonResult r;
-        r = [@(b.pixelWidth) compare:@(a.pixelWidth)];   if (r != NSOrderedSame) return r;
-        r = [@(b.pixelHeight) compare:@(a.pixelHeight)]; if (r != NSOrderedSame) return r;
-        r = [@(b.isHiDPI) compare:@(a.isHiDPI)];         if (r != NSOrderedSame) return r;
-        return [@(b.refreshRate) compare:@(a.refreshRate)];
+        if (a.pixelWidth  != b.pixelWidth)  return (a.pixelWidth  < b.pixelWidth)  ? NSOrderedDescending : NSOrderedAscending;
+        if (a.pixelHeight != b.pixelHeight) return (a.pixelHeight < b.pixelHeight) ? NSOrderedDescending : NSOrderedAscending;
+        if (a.isHiDPI     != b.isHiDPI)     return a.isHiDPI ? NSOrderedAscending : NSOrderedDescending;
+        if (a.refreshRate != b.refreshRate) return (a.refreshRate < b.refreshRate) ? NSOrderedDescending : NSOrderedAscending;
+        return NSOrderedSame;
     }];
 
     return result;
@@ -338,16 +382,10 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 }
 
 - (BOOL)hasExternalDisplay {
-    uint32_t count = 0;
-    CGDirectDisplayID displays[MAX_DISPLAYS];
-    if (CGGetOnlineDisplayList(MAX_DISPLAYS, displays, &count) != kCGErrorSuccess)
-        return NO;
-
-    NSSet *virtualIDs = [self virtualDisplayIDSet];
-
-    for (uint32_t i = 0; i < count; i++) {
-        if (CGDisplayIsBuiltin(displays[i])) continue;
-        if ([virtualIDs containsObject:@(displays[i])]) continue;
+    for (NSNumber *didNum in ddQueryDisplayList(CGGetOnlineDisplayList)) {
+        CGDirectDisplayID did = didNum.unsignedIntValue;
+        if (CGDisplayIsBuiltin(did)) continue;
+        if ([self isVirtualDisplayID:did]) continue;
         return YES;
     }
     return NO;
@@ -369,20 +407,18 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
 - (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
     if (!mode.modeRef) {
-        if (error) *error = ddError(-1, @"Invalid display mode");
+        if (error) *error = ddMakeError(DDErrorInvalidMode, @"Invalid display mode.");
         return NO;
     }
 
-    CGError err = CGDisplaySetDisplayMode(displayID, mode.modeRef, NULL);
-    if (err != kCGErrorSuccess) {
-        if (error) *error = ddError(err, @"Failed to set display mode (error %d)", err);
-        return NO;
-    }
-
-    return YES;
+    // Wrap in a transaction so the change is atomic and reverts cleanly on
+    // failure; kCGConfigureForSession persists it for the current login session.
+    return [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        return CGConfigureDisplayWithDisplayMode(config, displayID, mode.modeRef, NULL);
+    } error:error];
 }
 
-// ── HiDPI ────────────────────────────────────────────────────────────────────
+// ── HiDPI (native) ──────────────────────────────────────────────────────────
 
 - (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID {
     NSDictionary *opts = @{
@@ -410,192 +446,410 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     };
     CFArrayRef allModes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
     if (!allModes) {
-        if (error) *error = ddError(-1, @"Could not read display modes.");
+        if (error) *error = ddMakeError(DDErrorReadModesFailed, @"Could not read display modes.");
         return NO;
     }
 
-    CGDisplayModeRef bestMode = NULL;
-    size_t bestArea = 0;
+    // Choose the HiDPI mode whose pixel dimensions match the panel's current
+    // pixel resolution (the "native" HiDPI where logical = pixel / 2). When
+    // no such mode exists, pick the HiDPI mode with the largest logical area —
+    // this is the same choice the Displays pane makes for "Default for display".
+    CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
+    size_t curPW = 0, curPH = 0;
+    if (curMode) {
+        curPW = CGDisplayModeGetPixelWidth(curMode);
+        curPH = CGDisplayModeGetPixelHeight(curMode);
+        CGDisplayModeRelease(curMode);
+    }
+
+    CGDisplayModeRef pixelMatchMode = NULL;
+    CGDisplayModeRef largestAreaMode = NULL;
+    size_t largestArea = 0;
 
     CFIndex count = CFArrayGetCount(allModes);
     for (CFIndex i = 0; i < count; i++) {
         CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
         size_t pw = CGDisplayModeGetPixelWidth(mode);
+        size_t ph = CGDisplayModeGetPixelHeight(mode);
         size_t lw = CGDisplayModeGetWidth(mode);
         size_t lh = CGDisplayModeGetHeight(mode);
-        if (pw <= lw) continue;
+        if (pw <= lw) continue;  // not HiDPI
+
+        if (!pixelMatchMode && pw == curPW && ph == curPH) {
+            pixelMatchMode = mode;
+        }
         size_t area = lw * lh;
-        if (area > bestArea) {
-            bestArea = area;
-            bestMode = mode;
+        if (area > largestArea) {
+            largestArea = area;
+            largestAreaMode = mode;
         }
     }
 
+    CGDisplayModeRef bestMode = pixelMatchMode ? pixelMatchMode : largestAreaMode;
     if (!bestMode) {
         CFRelease(allModes);
-        if (error) *error = ddError(-1, @"No HiDPI modes available.");
+        if (error) *error = ddMakeError(DDErrorNoHiDPIModes, @"No HiDPI modes available.");
         return NO;
     }
 
-    CGError err = CGDisplaySetDisplayMode(displayID, bestMode, NULL);
+    // Retain the chosen mode across the CFRelease of the array.
+    CGDisplayModeRetain(bestMode);
     CFRelease(allModes);
 
-    if (err != kCGErrorSuccess) {
-        if (error) *error = ddError(err, @"Failed to set HiDPI mode (error %d)", err);
-        return NO;
-    }
-    return YES;
+    BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        return CGConfigureDisplayWithDisplayMode(config, displayID, bestMode, NULL);
+    } error:error];
+
+    CGDisplayModeRelease(bestMode);
+    return ok;
 }
 
 // ── Force HiDPI via CGVirtualDisplay ────────────────────────────────────────
 
-- (void)forceHiDPIForDisplay:(CGDirectDisplayID)displayID
-                  completion:(void (^)(BOOL success, NSError *error))completion {
-    // Runtime check — CGVirtualDisplay requires macOS 14+
+// Wait until `vdID` appears in CGGetOnlineDisplayList, or timeout.
+- (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while ([deadline compare:[NSDate date]] == NSOrderedDescending) {
+        uint32_t n = 0;
+        if (CGGetOnlineDisplayList(0, NULL, &n) == kCGErrorSuccess && n > 0) {
+            CGDirectDisplayID *buf = calloc(n, sizeof *buf);
+            if (buf && CGGetOnlineDisplayList(n, buf, &n) == kCGErrorSuccess) {
+                for (uint32_t i = 0; i < n; i++) {
+                    if (buf[i] == vdID) { free(buf); return YES; }
+                }
+            }
+            if (buf) free(buf);
+        }
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    return NO;
+}
+
+- (CGVirtualDisplay *)getOrCreateVirtualDisplayForPhysical:(CGDirectDisplayID)displayID
+                                                pixelWidth:(size_t)pixelWidth
+                                               pixelHeight:(size_t)pixelHeight
+                                                     error:(NSError **)error {
+    CGVirtualDisplay *existing = self.virtualDisplays[@(displayID)];
+    if (existing) {
+        // Reuse. Re-apply settings so the VD advertises modes that match this
+        // force's target (needed when consecutive forces use different targets).
+        Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
+        Class modeClass     = NSClassFromString(@"CGVirtualDisplayMode");
+        CGVirtualDisplaySettings *settings = [[settingsClass alloc] init];
+        settings.hiDPI = 1;
+        settings.modes = @[
+            [[modeClass alloc] initWithWidth:pixelWidth * 2 height:pixelHeight * 2 refreshRate:60.0],
+            [[modeClass alloc] initWithWidth:pixelWidth     height:pixelHeight     refreshRate:60.0],
+        ];
+        if (![existing applySettings:settings]) {
+            if (error) *error = ddMakeError(DDErrorVirtualApplyFailed,
+                                            @"Failed to reapply HiDPI settings to virtual display.");
+            return nil;
+        }
+        return existing;
+    }
+
+    // First-time creation.
+    CGSize mm = CGDisplayScreenSize(displayID);
+    if (mm.width <= 0 || mm.height <= 0) {
+        if (error) *error = ddMakeError(DDErrorPhysicalSizeUnknown,
+            @"Display reports no physical size; cannot build a virtual display.");
+        return nil;
+    }
+
     Class vdClass       = NSClassFromString(@"CGVirtualDisplay");
     Class descClass     = NSClassFromString(@"CGVirtualDisplayDescriptor");
     Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
     Class modeClass     = NSClassFromString(@"CGVirtualDisplayMode");
 
-    if (!vdClass || !descClass || !settingsClass || !modeClass) {
-        if (completion) completion(NO, ddError(-1, @"Force HiDPI requires macOS 14 or later."));
-        return;
-    }
-
-    if (self.virtualDisplays[@(displayID)]) {
-        if (completion) completion(NO, ddError(-1, @"HiDPI is already being forced for this display."));
-        return;
-    }
-
-    // Get current pixel resolution
-    CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
-    if (!curMode) {
-        if (completion) completion(NO, ddError(-1, @"Could not read current display mode."));
-        return;
-    }
-
-    size_t pixelWidth  = CGDisplayModeGetPixelWidth(curMode);
-    size_t pixelHeight = CGDisplayModeGetPixelHeight(curMode);
-    CGDisplayModeRelease(curMode);
-
-    // Virtual display at 2x so HiDPI logical resolution matches native pixels
-    size_t vdPixelWidth  = pixelWidth * 2;
-    size_t vdPixelHeight = pixelHeight * 2;
-
-    CGSize mm = CGDisplayScreenSize(displayID);
-    if (mm.width <= 0 || mm.height <= 0)
-        mm = CGSizeMake(600, 340);  // fallback ~27" 16:9
-
-    // Build virtual display
     CGVirtualDisplayDescriptor *desc = [[descClass alloc] init];
-    desc.name = [NSString stringWithFormat:@"DD-HiDPI-%X", displayID];
-    desc.maxPixelsWide = vdPixelWidth;
-    desc.maxPixelsHigh = vdPixelHeight;
+    desc.name              = [NSString stringWithFormat:@"DD-HiDPI-%X", displayID];
+    desc.maxPixelsWide     = pixelWidth * 2;
+    desc.maxPixelsHigh     = pixelHeight * 2;
     desc.sizeInMillimeters = mm;
-    desc.queue = dispatch_get_main_queue();
-    desc.vendorID  = 0xDD;
-    desc.productID = 0x01;
-    desc.serialNum = displayID;
+    desc.queue             = dispatch_get_main_queue();
+    desc.vendorID          = 0xDD;
+    desc.productID         = 0x01;
+    desc.serialNum         = displayID;
+    // sRGB primaries / D65 white point — vanilla color description.
     desc.redPrimary   = CGPointMake(0.6400, 0.3300);
     desc.greenPrimary = CGPointMake(0.3000, 0.6000);
     desc.bluePrimary  = CGPointMake(0.1500, 0.0600);
     desc.whitePoint   = CGPointMake(0.3127, 0.3290);
 
+    __weak __typeof(self) weakSelf = self;
+    CGDirectDisplayID physicalID = displayID;
+    desc.terminationHandler = ^(id __unused display, id __unused err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf handleVirtualDisplayTerminated:physicalID];
+        });
+    };
+
     CGVirtualDisplay *vd = [[vdClass alloc] initWithDescriptor:desc];
     if (!vd) {
-        if (completion) completion(NO, ddError(-1, @"Failed to create virtual display."));
-        return;
+        if (error) *error = ddMakeError(DDErrorVirtualCreateFailed,
+                                        @"Failed to create virtual display.");
+        return nil;
     }
 
-    // Apply HiDPI settings: native LoDPI mode + HiDPI target mode
     CGVirtualDisplaySettings *settings = [[settingsClass alloc] init];
     settings.hiDPI = 1;
     settings.modes = @[
-        [[modeClass alloc] initWithWidth:vdPixelWidth height:vdPixelHeight refreshRate:60.0],
-        [[modeClass alloc] initWithWidth:pixelWidth height:pixelHeight refreshRate:60.0],
+        [[modeClass alloc] initWithWidth:pixelWidth * 2 height:pixelHeight * 2 refreshRate:60.0],
+        [[modeClass alloc] initWithWidth:pixelWidth     height:pixelHeight     refreshRate:60.0],
     ];
-
     if (![vd applySettings:settings]) {
-        if (completion) completion(NO, ddError(-1, @"Failed to apply HiDPI settings to virtual display."));
-        return;
+        if (error) *error = ddMakeError(DDErrorVirtualApplyFailed,
+                                        @"Failed to apply HiDPI settings to virtual display.");
+        return nil;
     }
 
-    // Retain the virtual display
+    if (vd.displayID == kCGNullDirectDisplay) {
+        if (error) *error = ddMakeError(DDErrorVirtualNoDisplayID,
+                                        @"Virtual display has no valid ID.");
+        return nil;
+    }
+
     self.virtualDisplays[@(displayID)] = vd;
-    CGDirectDisplayID virtualID = vd.displayID;
+    return vd;
+}
 
-    if (virtualID == kCGNullDirectDisplay) {
-        [self.virtualDisplays removeObjectForKey:@(displayID)];
-        if (completion) completion(NO, ddError(-1, @"Virtual display has no valid ID."));
+- (void)forceHiDPIForDisplay:(CGDirectDisplayID)displayID
+                      atMode:(DDDisplayMode *)targetMode
+                  completion:(DDForceHiDPICompletion)completion {
+    DDForceHiDPICompletion deliver = ^(BOOL success, NSError *error) {
+        if (!completion) return;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(success, error); });
+    };
+
+    if (!NSClassFromString(@"CGVirtualDisplay")) {
+        deliver(NO, ddMakeError(DDErrorRequiresMacOS14,
+                                @"Force HiDPI requires macOS 14 or later."));
+        return;
+    }
+    if (self.forceActiveTargets[@(displayID)]) {
+        deliver(NO, ddMakeError(DDErrorAlreadyForced,
+                                @"HiDPI is already being forced for this display."));
+        return;
+    }
+    if (targetMode && !targetMode.modeRef) {
+        deliver(NO, ddMakeError(DDErrorInvalidMode, @"Invalid display mode."));
         return;
     }
 
-    // Defer mirroring so macOS registers the new virtual display.
-    // Without this delay, CGCompleteDisplayConfiguration fails with
-    // error 1001 on macOS 15+.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        NSError *mirrorError = nil;
-        BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-            return CGConfigureDisplayMirrorOfDisplay(config, displayID, virtualID);
-        } error:&mirrorError];
-
-        if (!ok) {
-            [self.virtualDisplays removeObjectForKey:@(displayID)];
-            if (completion) completion(NO, mirrorError);
+    // Resolve target pixel size.
+    size_t pixelWidth = 0, pixelHeight = 0;
+    if (targetMode) {
+        pixelWidth  = targetMode.pixelWidth;
+        pixelHeight = targetMode.pixelHeight;
+    } else {
+        CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
+        if (!curMode) {
+            deliver(NO, ddMakeError(DDErrorReadCurrentModeFailed,
+                                    @"Could not read current display mode."));
             return;
         }
+        pixelWidth  = CGDisplayModeGetPixelWidth(curMode);
+        pixelHeight = CGDisplayModeGetPixelHeight(curMode);
+        CGDisplayModeRelease(curMode);
+    }
 
-        NSLog(@"DisplayDisabler: Forced HiDPI for display 0x%X via virtual display 0x%X",
-              displayID, virtualID);
-        if (completion) completion(YES, nil);
-    });
+    // Capture the current mode for restore-on-stop (only if we're actually
+    // switching — i.e. targetMode provided and different from current).
+    DDDisplayMode *preForce = nil;
+    if (targetMode) {
+        for (DDDisplayMode *m in [self modesForDisplay:displayID]) {
+            if (m.isCurrent) { preForce = m; break; }
+        }
+    }
+
+    NSError *vdErr = nil;
+    CGVirtualDisplay *vd = [self getOrCreateVirtualDisplayForPhysical:displayID
+                                                           pixelWidth:pixelWidth
+                                                          pixelHeight:pixelHeight
+                                                                error:&vdErr];
+    if (!vd) { deliver(NO, vdErr); return; }
+    CGDirectDisplayID virtualID = vd.displayID;
+
+    // Wait until the VD is discoverable in CGGetOnlineDisplayList before
+    // attempting to mirror — CGCompleteDisplayConfiguration returns 1001
+    // if the destination ID isn't yet registered in the topology.
+    if (![self waitForVirtualDisplayOnline:virtualID timeout:kDDVirtualOnlineTimeout]) {
+        deliver(NO, ddMakeError(DDErrorVirtualCreateFailed,
+                                @"Virtual display did not appear online."));
+        return;
+    }
+
+    // Mirror FIRST (while the panel is still on its pre-force mode). Mode-
+    // switch-then-mirror hits CGError 1001 on macOS 26.3; mirror-first works.
+    NSError *mirrorError = nil;
+    BOOL mirrored = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        return CGConfigureDisplayMirrorOfDisplay(config, displayID, virtualID);
+    } error:&mirrorError];
+    if (!mirrored) { deliver(NO, mirrorError); return; }
+
+    // THEN switch the panel to the target mode (if any, and not already there).
+    if (targetMode) {
+        CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
+        BOOL alreadyOnTarget = NO;
+        if (curMode) {
+            alreadyOnTarget =
+                (CGDisplayModeGetPixelWidth(curMode)  == targetMode.pixelWidth &&
+                 CGDisplayModeGetPixelHeight(curMode) == targetMode.pixelHeight &&
+                 CGDisplayModeGetWidth(curMode)       == targetMode.logicalWidth &&
+                 CGDisplayModeGetHeight(curMode)      == targetMode.logicalHeight);
+            CGDisplayModeRelease(curMode);
+        }
+        if (!alreadyOnTarget) {
+            NSError *switchErr = nil;
+            BOOL switched = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                return CGConfigureDisplayWithDisplayMode(config, displayID,
+                                                         targetMode.modeRef, NULL);
+            } error:&switchErr];
+            if (!switched) {
+                // Roll back the mirror — leaving it live while the mode is wrong
+                // strands the panel in an inconsistent state.
+                [self unmirrorDisplay:displayID];
+                deliver(NO, switchErr);
+                return;
+            }
+        }
+    }
+
+    // Match the virtual display's gamma table to the physical panel's so the
+    // compositor renders to virtual with the correct transfer curve. Without
+    // this, mirrored HiDPI content shows a mild color/contrast shift relative
+    // to the same content rendered natively on the panel. Best-effort — a
+    // gamma mismatch is a quality issue, not a failure.
+    [self matchGammaFromDisplay:displayID toDisplay:virtualID];
+
+    self.forceActiveTargets[@(displayID)] = targetMode ?: preForce;
+    if (preForce) self.preForceModes[@(displayID)] = preForce;
+
+    NSLog(@"DisplayDisabler: Forced HiDPI for display 0x%X at %zu\u00D7%zu via virtual 0x%X",
+          displayID, pixelWidth, pixelHeight, virtualID);
+    deliver(YES, nil);
+}
+
+- (BOOL)matchGammaFromDisplay:(CGDirectDisplayID)source toDisplay:(CGDirectDisplayID)target {
+    enum { kGammaCapacity = 256 };
+    CGGammaValue red[kGammaCapacity], green[kGammaCapacity], blue[kGammaCapacity];
+    uint32_t sampleCount = 0;
+
+    CGError err = CGGetDisplayTransferByTable(source, kGammaCapacity,
+                                              red, green, blue, &sampleCount);
+    if (err != kCGErrorSuccess || sampleCount == 0) {
+        NSLog(@"DisplayDisabler: gamma read from 0x%X failed (%d)", source, err);
+        return NO;
+    }
+
+    err = CGSetDisplayTransferByTable(target, sampleCount, red, green, blue);
+    if (err != kCGErrorSuccess) {
+        NSLog(@"DisplayDisabler: gamma write to 0x%X failed (%d)", target, err);
+        return NO;
+    }
+    return YES;
+}
+
+- (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes {
+    if (modes.count == 0) return @[];
+
+    // Pixel sizes that already have at least one native HiDPI mode — skip.
+    NSMutableSet<NSString *> *nativeHiDPIPixelKeys = [NSMutableSet set];
+    for (DDDisplayMode *m in modes) {
+        if (m.isHiDPI) {
+            [nativeHiDPIPixelKeys addObject:
+                [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight]];
+        }
+    }
+
+    // For each eligible pixel size, pick the highest-refresh Standard mode.
+    NSMutableDictionary<NSString *, DDDisplayMode *> *bestByPixel = [NSMutableDictionary dictionary];
+    for (DDDisplayMode *m in modes) {
+        if (m.isHiDPI) continue;
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight];
+        if ([nativeHiDPIPixelKeys containsObject:key]) continue;
+        DDDisplayMode *cur = bestByPixel[key];
+        if (!cur || m.refreshRate > cur.refreshRate) bestByPixel[key] = m;
+    }
+
+    return [bestByPixel.allValues sortedArrayUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
+        if (a.pixelWidth  != b.pixelWidth)  return (a.pixelWidth  < b.pixelWidth)  ? NSOrderedDescending : NSOrderedAscending;
+        if (a.pixelHeight != b.pixelHeight) return (a.pixelHeight < b.pixelHeight) ? NSOrderedDescending : NSOrderedAscending;
+        return NSOrderedSame;
+    }];
 }
 
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
-    if (!self.virtualDisplays[@(displayID)]) {
-        if (error) *error = ddError(-1, @"HiDPI is not being forced for this display.");
+    if (!self.forceActiveTargets[@(displayID)]) {
+        if (error) *error = ddMakeError(DDErrorNotForced,
+                                        @"HiDPI is not being forced for this display.");
         return NO;
     }
 
     [self unmirrorDisplay:displayID];
-    [self.virtualDisplays removeObjectForKey:@(displayID)];
+
+    // Restore the panel to its pre-force mode so the user isn't left on the
+    // reduced Standard resolution after stop.
+    DDDisplayMode *pre = self.preForceModes[@(displayID)];
+    if (pre && pre.modeRef) {
+        NSError *restoreErr = nil;
+        if (![self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+            return CGConfigureDisplayWithDisplayMode(config, displayID, pre.modeRef, NULL);
+        } error:&restoreErr]) {
+            NSLog(@"DisplayDisabler: Warning: failed to restore pre-force mode on 0x%X: %@",
+                  displayID, restoreErr);
+        }
+    }
+
+    [self.forceActiveTargets removeObjectForKey:@(displayID)];
+    [self.preForceModes      removeObjectForKey:@(displayID)];
+    // virtualDisplays entry is deliberately retained — see property comment.
+
     NSLog(@"DisplayDisabler: Stopped forced HiDPI for display 0x%X", displayID);
     return YES;
 }
 
 - (BOOL)isHiDPIForcedForDisplay:(CGDirectDisplayID)displayID {
-    return self.virtualDisplays[@(displayID)] != nil;
+    return self.forceActiveTargets[@(displayID)] != nil;
 }
 
 - (void)cleanUpAllVirtualDisplays {
-    if (self.virtualDisplays.count == 0) return;
-
-    for (NSNumber *displayIDNum in [self.virtualDisplays allKeys]) {
-        [self unmirrorDisplay:[displayIDNum unsignedIntValue]];
+    for (NSNumber *physicalIDNum in self.forceActiveTargets.allKeys) {
+        CGDirectDisplayID did = physicalIDNum.unsignedIntValue;
+        [self unmirrorDisplay:did];
+        DDDisplayMode *pre = self.preForceModes[physicalIDNum];
+        if (pre && pre.modeRef) {
+            [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                return CGConfigureDisplayWithDisplayMode(config, did, pre.modeRef, NULL);
+            } error:NULL];
+        }
     }
-    [self.virtualDisplays removeAllObjects];
-    NSLog(@"DisplayDisabler: Cleaned up all virtual displays.");
+    [self.forceActiveTargets removeAllObjects];
+    [self.preForceModes      removeAllObjects];
+
+    // Releasing the virtual displays here is mostly a formality — the process
+    // is about to exit, which guarantees OS-side teardown. Still, clear the
+    // dict so any late callbacks see a clean slate.
+    if (self.virtualDisplays.count > 0) {
+        [self.virtualDisplays removeAllObjects];
+        NSLog(@"DisplayDisabler: Cleaned up all virtual displays.");
+    }
 }
 
 - (void)pruneStaleVirtualDisplays {
     if (self.virtualDisplays.count == 0) return;
 
-    uint32_t onlineCount = 0;
-    CGDirectDisplayID online[MAX_DISPLAYS];
-    if (CGGetOnlineDisplayList(MAX_DISPLAYS, online, &onlineCount) != kCGErrorSuccess)
-        return;
+    NSSet<NSNumber *> *onlineSet = [NSSet setWithArray:ddQueryDisplayList(CGGetOnlineDisplayList)];
 
-    NSMutableSet *onlineSet = [NSMutableSet set];
-    for (uint32_t i = 0; i < onlineCount; i++)
-        [onlineSet addObject:@(online[i])];
-
-    for (NSNumber *displayIDNum in [self.virtualDisplays allKeys]) {
-        if (![onlineSet containsObject:displayIDNum]) {
-            CGDirectDisplayID did = [displayIDNum unsignedIntValue];
-            NSLog(@"DisplayDisabler: Display 0x%X disconnected, removing virtual display.", did);
+    for (NSNumber *physicalIDNum in self.virtualDisplays.allKeys) {
+        if (![onlineSet containsObject:physicalIDNum]) {
+            CGDirectDisplayID did = physicalIDNum.unsignedIntValue;
+            NSLog(@"DisplayDisabler: Display 0x%X disconnected, releasing virtual display.", did);
             [self unmirrorDisplay:did];
-            [self.virtualDisplays removeObjectForKey:displayIDNum];
+            [self.forceActiveTargets removeObjectForKey:physicalIDNum];
+            [self.preForceModes      removeObjectForKey:physicalIDNum];
+            [self.virtualDisplays    removeObjectForKey:physicalIDNum];
         }
     }
 }
@@ -619,14 +873,15 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
 - (void)screenParametersChanged:(NSNotification *)notification {
     (void)notification;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self scheduleChangeNotification];
-    });
+    // NSApplicationDidChangeScreenParametersNotification is posted on main, so
+    // no dispatch hop is required.
+    [self scheduleChangeNotification];
 }
 
 - (void)scheduleChangeNotification {
     NSInteger token = ++self.coalesceToken;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kDDCoalesceInterval * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         if (token == self.coalesceToken && self.changeHandler) {
             self.changeHandler();

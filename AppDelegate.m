@@ -5,10 +5,9 @@
 
 #import "AppDelegate.h"
 #import "DisplayManager.h"
+#import "DDC.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
-
-#define APP_VERSION "3.0"
 
 // ── UserDefaults keys ───────────────────────────────────────────────────────
 
@@ -16,16 +15,34 @@ static NSString * const kAutoManage        = @"AutoManageBuiltIn";
 static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
+static NSString * const kHideNotch         = @"HideNotch";
 
-// ── Switch row layout constants ─────────────────────────────────────────────
+// Notification identifier used for auto-manage events so consecutive
+// disable/re-enable banners replace each other instead of stacking.
+static NSString * const kAutoManageNotifID = @"auto-manage";
 
-static const CGFloat kSwitchRowWidth  = 290;
-static const CGFloat kSwitchRowHeight = 28;
-static const CGFloat kSwitchRowPad    = 18;
+// ── Switch-row layout ───────────────────────────────────────────────────────
 
-@interface AppDelegate () <UNUserNotificationCenterDelegate>
+static const CGFloat kSwitchRowWidth   = 290;
+static const CGFloat kSwitchRowHeight  = 28;
+static const CGFloat kSwitchRowPad     = 18;
+static const CGFloat kSwitchLabelGap   = 8;
+
+// ── Modes-submenu layout ────────────────────────────────────────────────────
+// Column widths (in chars) tuned for a monospaced font. Covers 8K and 5-digit
+// pixel counts with room to spare.
+
+static const NSUInteger kModeColPixels  = 17;
+static const NSUInteger kModeColLogical = 17;
+static const NSUInteger kModeColType    = 10;
+
+@interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
+@property (nonatomic) BOOL notificationAuthRequested;
+// Black strip covering the notch region of the MacBook's built-in display.
+// Created lazily; nil when the pref is off or no notched display is attached.
+@property (nonatomic, strong) NSWindow *notchOverlay;
 @end
 
 @implementation AppDelegate
@@ -37,20 +54,26 @@ static const CGFloat kSwitchRowPad    = 18;
     [self registerDefaults];
 
     self.displayManager = [DisplayManager shared];
-    [self setupStatusItem];
-    [self setupNotifications];
-    [self rebuildMenu];
 
-    __weak typeof(self) weakSelf = self;
+    UNUserNotificationCenter.currentNotificationCenter.delegate = self;
+
+    [self setupStatusItem];
+    [self rebuildMenu];
+    [self updateNotchOverlay];
+
+    __weak __typeof(self) weakSelf = self;
     [self.displayManager startMonitoringWithChangeHandler:^{
-        typeof(self) strongSelf = weakSelf;
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf.displayManager pruneStaleVirtualDisplays];
         [strongSelf rebuildMenu];
+        [strongSelf updateNotchOverlay];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
     }];
 
+    // Reconfiguration callbacks don't fire on registration, so run once
+    // now to cover the common "launched while already plugged in" case.
     [self performAutoDisableIfNeeded];
 }
 
@@ -58,6 +81,7 @@ static const CGFloat kSwitchRowPad    = 18;
     (void)notification;
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
+    [self tearDownNotchOverlay];
 }
 
 - (void)registerDefaults {
@@ -66,19 +90,11 @@ static const CGFloat kSwitchRowPad    = 18;
         kShowNotifications: @YES,
         kConfirmDisable:    @YES,
         kShowResolutions:   @YES,
+        kHideNotch:         @NO,
     }];
 }
 
 // ── Notifications ───────────────────────────────────────────────────────────
-
-- (void)setupNotifications {
-    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
-    center.delegate = self;
-    [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-                          completionHandler:^(BOOL granted __unused, NSError *error) {
-        if (error) NSLog(@"DisplayDisabler: Notification auth error: %@", error);
-    }];
-}
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
@@ -88,7 +104,7 @@ static const CGFloat kSwitchRowPad    = 18;
 }
 
 - (void)postNotification:(NSString *)title body:(NSString *)body {
-    [self postNotification:title body:body identifier:[[NSUUID UUID] UUIDString]];
+    [self postNotification:title body:body identifier:[NSUUID UUID].UUIDString];
 }
 
 - (void)postNotification:(NSString *)title body:(NSString *)body identifier:(NSString *)identifier {
@@ -96,14 +112,31 @@ static const CGFloat kSwitchRowPad    = 18;
 
     UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
     content.title = title;
-    content.body = body;
+    content.body  = body;
     content.sound = [UNNotificationSound defaultSound];
-
     UNNotificationRequest *request =
         [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
 
-    [[UNUserNotificationCenter currentNotificationCenter]
-        addNotificationRequest:request withCompletionHandler:nil];
+    dispatch_block_t deliver = ^{
+        [UNUserNotificationCenter.currentNotificationCenter
+            addNotificationRequest:request withCompletionHandler:nil];
+    };
+
+    // Lazy-request auth on first use so a menu-bar-only app doesn't surface a
+    // permission prompt until it actually has something to say.
+    if (self.notificationAuthRequested) {
+        deliver();
+        return;
+    }
+    self.notificationAuthRequested = YES;
+
+    UNAuthorizationOptions opts = UNAuthorizationOptionAlert | UNAuthorizationOptionSound;
+    [UNUserNotificationCenter.currentNotificationCenter
+        requestAuthorizationWithOptions:opts
+                      completionHandler:^(BOOL granted, NSError *error) {
+        if (error) NSLog(@"DisplayDisabler: Notification auth error: %@", error);
+        if (granted) dispatch_async(dispatch_get_main_queue(), deliver);
+    }];
 }
 
 // ── Status item ─────────────────────────────────────────────────────────────
@@ -122,12 +155,69 @@ static const CGFloat kSwitchRowPad    = 18;
 
     NSImage *icon = [NSImage imageWithSystemSymbolName:symbolName
                                accessibilityDescription:@"DisplayDisabler"];
-    // Fallback for macOS 13 where the badge symbol may not exist
-    if (!icon)
-        icon = [NSImage imageWithSystemSymbolName:@"display"
-                           accessibilityDescription:@"DisplayDisabler"];
     [icon setTemplate:YES];
     self.statusItem.button.image = icon;
+}
+
+// ── Notch overlay ───────────────────────────────────────────────────────────
+
+// Screen whose built-in panel has a camera notch, else nil. Detected via
+// NSScreen.safeAreaInsets.top > 0 — non-zero only on notched MacBooks.
+- (NSScreen *)notchedScreen {
+    if (@available(macOS 12.0, *)) {
+        for (NSScreen *s in [NSScreen screens]) {
+            if (s.safeAreaInsets.top > 0) return s;
+        }
+    }
+    return nil;
+}
+
+- (void)updateNotchOverlay {
+    BOOL wantsOverlay = [self pref:kHideNotch];
+    NSScreen *screen = [self notchedScreen];
+
+    if (!wantsOverlay || !screen) {
+        [self tearDownNotchOverlay];
+        return;
+    }
+
+    CGFloat notchHeight = 0;
+    if (@available(macOS 12.0, *)) notchHeight = screen.safeAreaInsets.top;
+    if (notchHeight <= 0) { [self tearDownNotchOverlay]; return; }
+
+    // Cocoa windows are bottom-left-origin; place our strip flush with the
+    // top of the target screen, full width, notch-height tall.
+    NSRect frame = NSMakeRect(screen.frame.origin.x,
+                              screen.frame.origin.y + screen.frame.size.height - notchHeight,
+                              screen.frame.size.width,
+                              notchHeight);
+
+    if (!self.notchOverlay) {
+        NSWindow *w = [[NSWindow alloc] initWithContentRect:frame
+                                                  styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+        w.backgroundColor = [NSColor blackColor];
+        w.opaque = YES;
+        w.hasShadow = NO;
+        // Above the menubar so it sits on top of the notch cutout.
+        w.level = NSStatusWindowLevel + 1;
+        w.ignoresMouseEvents = YES;
+        w.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                NSWindowCollectionBehaviorStationary |
+                                NSWindowCollectionBehaviorIgnoresCycle |
+                                NSWindowCollectionBehaviorFullScreenAuxiliary;
+        self.notchOverlay = w;
+    } else {
+        [self.notchOverlay setFrame:frame display:NO];
+    }
+    [self.notchOverlay orderFront:nil];
+}
+
+- (void)tearDownNotchOverlay {
+    if (!self.notchOverlay) return;
+    [self.notchOverlay orderOut:nil];
+    self.notchOverlay = nil;
 }
 
 // ── Menu building ───────────────────────────────────────────────────────────
@@ -137,19 +227,22 @@ static const CGFloat kSwitchRowPad    = 18;
     menu.autoenablesItems = NO;
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+
     NSUInteger activeCount = 0;
     BOOL anyDisabled = NO;
     for (DDDisplayInfo *d in displays) {
-        if (d.isActive || [self.displayManager isHiDPIForcedForDisplay:d.displayID])
-            activeCount++;
-        else
-            anyDisabled = YES;
+        BOOL effectivelyActive = d.isActive ||
+            [self.displayManager isHiDPIForcedForDisplay:d.displayID];
+        if (effectivelyActive) activeCount++;
+        else                   anyDisabled = YES;
     }
 
     [self updateStatusIcon:anyDisabled];
 
+    NSString *version = [[NSBundle mainBundle]
+                         objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     [self addLabelToMenu:menu title:
-        [NSString stringWithFormat:@"DisplayDisabler v%s", APP_VERSION]];
+        [NSString stringWithFormat:@"DisplayDisabler v%@", version]];
     [self addLabelToMenu:menu title:
         [NSString stringWithFormat:@"%lu connected, %lu active",
          (unsigned long)displays.count, (unsigned long)activeCount]];
@@ -163,7 +256,15 @@ static const CGFloat kSwitchRowPad    = 18;
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
-    settingsItem.submenu = [self buildSettingsSubmenu];
+    // Populate lazily in -menuNeedsUpdate:. Building the custom switch-row
+    // views eagerly here can trip AppKit's layout-recursion warning because
+    // NSSwitch + NSTextField bring autolayout constraints into a menu-item
+    // custom view. Lazy build also makes the settings always reflect current
+    // Launch-at-Login status without us having to watch SMAppService.
+    NSMenu *settingsMenu = [[NSMenu alloc] init];
+    settingsMenu.autoenablesItems = NO;
+    settingsMenu.delegate = self;
+    settingsItem.submenu = settingsMenu;
     [menu addItem:settingsItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
@@ -181,9 +282,10 @@ static const CGFloat kSwitchRowPad    = 18;
 // ── Per-display menu section ────────────────────────────────────────────────
 
 - (void)addDisplaySection:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    [self addDisplayHeader:display toMenu:menu];
+    BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+    [self addDisplayHeader:display forced:forced toMenu:menu];
 
-    if ([self.displayManager isHiDPIForcedForDisplay:display.displayID]) {
+    if (forced) {
         [self addForcedHiDPIControls:display toMenu:menu];
     } else if (display.isActive) {
         [self addActiveDisplayControls:display toMenu:menu];
@@ -192,12 +294,12 @@ static const CGFloat kSwitchRowPad    = 18;
     }
 }
 
-- (void)addDisplayHeader:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    BOOL effectivelyActive = display.isActive ||
-        [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+- (void)addDisplayHeader:(DDDisplayInfo *)display
+                  forced:(BOOL)forced
+                  toMenu:(NSMenu *)menu {
+    BOOL effectivelyActive = display.isActive || forced;
     NSString *dot = effectivelyActive ? @"\u25CF " : @"\u25CB ";
 
-    // Display name prominent, hex ID dimmed for power users
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
         initWithString:[NSString stringWithFormat:@"%@%@", dot, display.name]
             attributes:@{NSFontAttributeName: [NSFont menuBarFontOfSize:14]}];
@@ -215,14 +317,11 @@ static const CGFloat kSwitchRowPad    = 18;
     nameItem.attributedTitle = attrTitle;
     [menu addItem:nameItem];
 
-    // Tags line
-    NSMutableArray *tags = [NSMutableArray array];
-    if ([self.displayManager isHiDPIForcedForDisplay:display.displayID])
-        [tags addObject:@"HiDPI forced"];
-    else
-        [tags addObject:display.isActive ? @"active" : @"disabled"];
+    NSMutableArray<NSString *> *tags = [NSMutableArray array];
+    if (forced)            [tags addObject:@"HiDPI forced"];
+    else                   [tags addObject:display.isActive ? @"active" : @"disabled"];
     if (display.isBuiltIn) [tags addObject:@"built-in"];
-    if (display.isMain) [tags addObject:@"main"];
+    if (display.isMain)    [tags addObject:@"main"];
 
     [self addLabelToMenu:menu title:
         [NSString stringWithFormat:@"    %@",
@@ -236,36 +335,109 @@ static const CGFloat kSwitchRowPad    = 18;
 }
 
 - (void)addActiveDisplayControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    // Resolution info — always omit Hz when 0
     NSMutableString *resStr = [NSMutableString stringWithFormat:@"    %zu \u00D7 %zu",
                                display.pixelWidth, display.pixelHeight];
-    if (display.isHiDPI && display.logicalWidth > 0)
+    if (display.isHiDPI && display.logicalWidth > 0) {
         [resStr appendFormat:@" @%zux", display.pixelWidth / display.logicalWidth];
-    if (display.refreshRate > 0)
+    }
+    if (display.refreshRate > 0) {
         [resStr appendFormat:@"  %.0fHz", display.refreshRate];
+    }
     [self addLabelToMenu:menu title:resStr];
 
-    // All Resolutions submenu
-    if ([self pref:kShowResolutions]) {
+    // Fetch the mode list once; both submenu builders read from it.
+    BOOL needAllRes  = [self pref:kShowResolutions];
+    BOOL needForce   = !display.isHiDPI && NSClassFromString(@"CGVirtualDisplay");
+    NSArray<DDDisplayMode *> *modes = (needAllRes || needForce)
+        ? [self.displayManager modesForDisplay:display.displayID]
+        : @[];
+
+    if (needAllRes) {
         NSMenuItem *modesItem = [[NSMenuItem alloc]
             initWithTitle:@"    All Resolutions" action:nil keyEquivalent:@""];
-        modesItem.submenu = [self buildModesSubmenuForDisplay:display.displayID];
+        modesItem.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
         [menu addItem:modesItem];
     }
 
-    // HiDPI options
     if (!display.isHiDPI && display.hasNativeHiDPIModes) {
         [self addActionToMenu:menu title:@"Switch to HiDPI"
                        action:@selector(switchToHiDPI:) displayID:display.displayID];
-    } else if (!display.isHiDPI && !display.hasNativeHiDPIModes &&
-               NSClassFromString(@"CGVirtualDisplay")) {
-        [self addActionToMenu:menu title:@"Force HiDPI"
-                       action:@selector(forceHiDPI:) displayID:display.displayID];
     }
 
-    // Disable
+    if (needForce) {
+        NSArray<DDDisplayMode *> *candidates =
+            [self.displayManager forceHiDPICandidatesFromModes:modes];
+        if (candidates.count > 0) {
+            NSMenuItem *forceItem = [[NSMenuItem alloc]
+                initWithTitle:@"    Force HiDPI" action:nil keyEquivalent:@""];
+            forceItem.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID
+                                                                 modes:candidates];
+            [menu addItem:forceItem];
+        }
+    }
+
+    if ([[DDC shared] supportsBrightness:display.displayID]) {
+        NSMenuItem *brightItem = [[NSMenuItem alloc]
+            initWithTitle:@"    Brightness" action:nil keyEquivalent:@""];
+        brightItem.submenu = [self buildBrightnessSubmenuForDisplay:display.displayID];
+        [menu addItem:brightItem];
+    }
+
     [self addActionToMenu:menu title:@"Disable This Display"
                    action:@selector(disableDisplay:) displayID:display.displayID];
+}
+
+- (NSMenu *)buildBrightnessSubmenuForDisplay:(CGDirectDisplayID)displayID {
+    NSMenu *submenu = [[NSMenu alloc] init];
+    submenu.autoenablesItems = NO;
+
+    static const uint8_t levels[] = {10, 25, 50, 75, 100};
+    for (size_t i = 0; i < sizeof levels / sizeof *levels; i++) {
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:[NSString stringWithFormat:@"%u%%", levels[i]]
+                   action:@selector(setBrightness:)
+            keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = @{ @"displayID": @(displayID),
+                                    @"percent":   @(levels[i]) };
+        [submenu addItem:item];
+    }
+    return submenu;
+}
+
+- (NSMenu *)buildForceHiDPISubmenuForDisplay:(CGDirectDisplayID)displayID
+                                       modes:(NSArray<DDDisplayMode *> *)modes {
+    NSMenu *submenu = [[NSMenu alloc] init];
+    submenu.autoenablesItems = NO;
+
+    NSFont *mono = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+
+    NSMenuItem *header = [[NSMenuItem alloc]
+        initWithTitle:@"Mirror into a 2\u00D7 virtual display"
+               action:nil keyEquivalent:@""];
+    header.enabled = NO;
+    [submenu addItem:header];
+    [submenu addItem:[NSMenuItem separatorItem]];
+
+    for (DDDisplayMode *mode in modes) {
+        NSMutableString *line = [NSMutableString stringWithFormat:@"%zu \u00D7 %zu",
+                                 mode.pixelWidth, mode.pixelHeight];
+        if (mode.refreshRate > 0) {
+            [line appendFormat:@"  %.0fHz", mode.refreshRate];
+        }
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:@""
+                   action:@selector(forceHiDPIAtMode:)
+            keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = @{ @"displayID": @(displayID), @"mode": mode };
+        item.attributedTitle = [[NSAttributedString alloc]
+            initWithString:line
+                attributes:@{NSFontAttributeName: mono}];
+        [submenu addItem:item];
+    }
+
+    return submenu;
 }
 
 - (void)addDisabledDisplayControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
@@ -273,40 +445,40 @@ static const CGFloat kSwitchRowPad    = 18;
                    action:@selector(enableDisplay:) displayID:display.displayID];
 }
 
-// ── Settings submenu ─────────────────────────────────────────────────────────
+// ── Settings submenu (lazy) ─────────────────────────────────────────────────
 
-- (NSMenu *)buildSettingsSubmenu {
-    NSMenu *settings = [[NSMenu alloc] init];
-    settings.autoenablesItems = NO;
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    [menu removeAllItems];
 
-    [settings addItem:[self switchRowWithTitle:
+    [menu addItem:[self switchRowWithTitle:
         @"Turn off laptop screen when external monitor is connected"
             state:[self pref:kAutoManage] identifier:kAutoManage
            action:@selector(switchToggled:)]];
-    [settings addItem:[NSMenuItem separatorItem]];
+    [menu addItem:[NSMenuItem separatorItem]];
 
-    [settings addItem:[self checkItemWithTitle:@"Show notifications"
-                                           key:kShowNotifications
-                                        action:@selector(toggleCheckSetting:)]];
-    [settings addItem:[self checkItemWithTitle:@"Ask before disabling a display"
-                                           key:kConfirmDisable
-                                        action:@selector(toggleCheckSetting:)]];
-    [settings addItem:[self checkItemWithTitle:@"Show all resolutions"
-                                           key:kShowResolutions
-                                        action:@selector(toggleCheckSettingAndRebuild:)]];
-    [settings addItem:[NSMenuItem separatorItem]];
+    [menu addItem:[self checkItemWithTitle:@"Show notifications"
+                                       key:kShowNotifications]];
+    [menu addItem:[self checkItemWithTitle:@"Ask before disabling a display"
+                                       key:kConfirmDisable]];
+    [menu addItem:[self checkItemWithTitle:@"Show all resolutions"
+                                       key:kShowResolutions]];
+
+    // Hide-the-notch is only offered when a notched display is actually attached.
+    if ([self notchedScreen]) {
+        [menu addItem:[self checkItemWithTitle:@"Hide the notch on built-in display"
+                                           key:kHideNotch]];
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
 
     BOOL loginEnabled = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled);
-    [settings addItem:[self switchRowWithTitle:@"Launch at Login"
-            state:loginEnabled identifier:@"LaunchAtLogin"
+    [menu addItem:[self switchRowWithTitle:@"Launch at Login"
+            state:loginEnabled identifier:nil
            action:@selector(loginSwitchToggled:)]];
-
-    return settings;
 }
 
-- (NSMenuItem *)checkItemWithTitle:(NSString *)title key:(NSString *)key action:(SEL)action {
+- (NSMenuItem *)checkItemWithTitle:(NSString *)title key:(NSString *)key {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
-                                                 action:action
+                                                 action:@selector(toggleCheckSetting:)
                                           keyEquivalent:@""];
     item.target = self;
     item.representedObject = key;
@@ -316,19 +488,18 @@ static const CGFloat kSwitchRowPad    = 18;
 
 - (NSMenuItem *)switchRowWithTitle:(NSString *)title
                              state:(BOOL)state
-                        identifier:(NSString *)identifier
+                        identifier:(nullable NSString *)identifier
                             action:(SEL)action {
     NSMenuItem *item = [[NSMenuItem alloc] init];
 
-    // Measure switch first to calculate available label width
     NSSwitch *sw = [[NSSwitch alloc] init];
     sw.controlSize = NSControlSizeMini;
+    sw.translatesAutoresizingMaskIntoConstraints = YES;
     [sw sizeToFit];
-    CGFloat switchWidth = sw.frame.size.width;
+    CGFloat switchWidth  = sw.frame.size.width;
     CGFloat switchHeight = sw.frame.size.height;
 
-    // Calculate label width and measure wrapped height
-    CGFloat labelWidth = kSwitchRowWidth - kSwitchRowPad * 2 - switchWidth - 8;
+    CGFloat labelWidth = kSwitchRowWidth - (kSwitchRowPad * 2) - switchWidth - kSwitchLabelGap;
     NSFont *font = [NSFont menuFontOfSize:13];
     NSRect textRect = [title boundingRectWithSize:NSMakeSize(labelWidth, CGFLOAT_MAX)
                                           options:NSStringDrawingUsesLineFragmentOrigin
@@ -336,9 +507,10 @@ static const CGFloat kSwitchRowPad    = 18;
     CGFloat labelHeight = ceil(textRect.size.height);
     CGFloat rowHeight = MAX(kSwitchRowHeight, labelHeight + 10);
 
-    // Build row
     NSView *row = [[NSView alloc] initWithFrame:
                    NSMakeRect(0, 0, kSwitchRowWidth, rowHeight)];
+    row.translatesAutoresizingMaskIntoConstraints = YES;
+    row.autoresizesSubviews = NO;
 
     sw.frame = NSMakeRect(kSwitchRowWidth - kSwitchRowPad - switchWidth,
                           (rowHeight - switchHeight) / 2,
@@ -350,10 +522,16 @@ static const CGFloat kSwitchRowPad    = 18;
     sw.accessibilityLabel = title;
     [row addSubview:sw];
 
+    // `labelWithString:` returns a label with auto-layout enabled, which
+    // triggers recursive layout when AppKit lays out our custom menu-item
+    // view. Pin it to manual frame layout and preset its preferred wrap
+    // width so the intrinsic-size calc doesn't re-enter.
     NSTextField *label = [NSTextField labelWithString:title];
+    label.translatesAutoresizingMaskIntoConstraints = YES;
     label.font = font;
     label.lineBreakMode = NSLineBreakByWordWrapping;
     label.maximumNumberOfLines = 0;
+    label.preferredMaxLayoutWidth = labelWidth;
     label.frame = NSMakeRect(kSwitchRowPad,
                              (rowHeight - labelHeight) / 2,
                              labelWidth, labelHeight);
@@ -365,18 +543,23 @@ static const CGFloat kSwitchRowPad    = 18;
 
 // ── Modes submenu ───────────────────────────────────────────────────────────
 
-- (NSMenu *)buildModesSubmenuForDisplay:(CGDirectDisplayID)displayID {
+- (NSMenu *)buildModesSubmenuForDisplay:(CGDirectDisplayID)displayID
+                                  modes:(NSArray<DDDisplayMode *> *)modes {
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
-    NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:displayID];
-    NSFont *mono = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSFont *mono     = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     NSFont *monoBold = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
 
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"" action:nil keyEquivalent:@""];
+    NSString *headerLine = [NSString stringWithFormat:@"%@%@%@%@",
+        [@"Pixels"    stringByPaddingToLength:kModeColPixels  withString:@" " startingAtIndex:0],
+        [@"Looks Like" stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0],
+        [@"Type"      stringByPaddingToLength:kModeColType    withString:@" " startingAtIndex:0],
+        @"Rate"];
     header.attributedTitle = [[NSAttributedString alloc]
-        initWithString:@"Pixels           Looks Like       Type      Rate"
+        initWithString:headerLine
             attributes:@{NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11
                                                 weight:NSFontWeightBold]}];
     header.enabled = NO;
@@ -389,12 +572,12 @@ static const CGFloat kSwitchRowPad    = 18;
 
         NSString *pixelCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
             mode.pixelWidth, mode.pixelHeight]
-            stringByPaddingToLength:17 withString:@" " startingAtIndex:0];
+            stringByPaddingToLength:kModeColPixels withString:@" " startingAtIndex:0];
         NSString *logicalCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
             mode.logicalWidth, mode.logicalHeight]
-            stringByPaddingToLength:17 withString:@" " startingAtIndex:0];
+            stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0];
         NSString *typeCol = [(mode.isHiDPI ? @"HiDPI" : @"Standard")
-            stringByPaddingToLength:10 withString:@" " startingAtIndex:0];
+            stringByPaddingToLength:kModeColType withString:@" " startingAtIndex:0];
 
         NSString *line = [NSString stringWithFormat:@"%@%@%@%@",
             pixelCol, logicalCol, typeCol, rateStr];
@@ -407,7 +590,7 @@ static const CGFloat kSwitchRowPad    = 18;
         item.enabled = !mode.isCurrent;
         item.representedObject = @{
             @"mode": mode,
-            @"displayID": @(displayID)
+            @"displayID": @(displayID),
         };
         item.attributedTitle = [[NSAttributedString alloc]
             initWithString:line
@@ -473,13 +656,14 @@ static const CGFloat kSwitchRowPad    = 18;
         NSString *label = mode.isHiDPI ? @"HiDPI" : @"Standard";
         NSMutableString *body = [NSMutableString stringWithFormat:
             @"%zu \u00D7 %zu %@", mode.pixelWidth, mode.pixelHeight, label];
-        if (mode.refreshRate > 0)
+        if (mode.refreshRate > 0) {
             [body appendFormat:@" %.0fHz", mode.refreshRate];
+        }
         [self postNotification:@"Resolution Changed" body:body];
     } else {
         NSLog(@"DisplayDisabler: Failed to set mode: %@", error);
         [self postNotification:@"Resolution Change Failed"
-                          body:error.localizedDescription ?: @"Unknown error"];
+                          body:error.localizedDescription];
     }
 }
 
@@ -487,10 +671,9 @@ static const CGFloat kSwitchRowPad    = 18;
     CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
 
-    // Refuse to disable the last active display — prevents an unrecoverable black screen
-    NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+    // Refuse to disable the last active display — prevents an unrecoverable black screen.
     NSUInteger activeCount = 0;
-    for (DDDisplayInfo *d in displays) {
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
         if (d.isActive) activeCount++;
     }
     if (activeCount <= 1) {
@@ -499,11 +682,11 @@ static const CGFloat kSwitchRowPad    = 18;
         return;
     }
 
-    if ([self pref:kConfirmDisable]) {
-        if (![self confirmAction:[NSString stringWithFormat:@"Disable \"%@\"?", name]
-                            info:@"You can re-enable it from this menu."]) {
-            return;
-        }
+    if ([self pref:kConfirmDisable] &&
+        ![self confirmDestructive:[NSString stringWithFormat:@"Disable \"%@\"?", name]
+                             info:@"You can re-enable it from this menu."
+                       actionName:@"Disable"]) {
+        return;
     }
 
     NSError *error = nil;
@@ -513,7 +696,7 @@ static const CGFloat kSwitchRowPad    = 18;
     } else {
         NSLog(@"DisplayDisabler: Failed to disable 0x%X: %@", did, error);
         [self postNotification:@"Disable Failed"
-                          body:error.localizedDescription ?: @"Unknown error"];
+                          body:error.localizedDescription];
     }
 }
 
@@ -527,7 +710,7 @@ static const CGFloat kSwitchRowPad    = 18;
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
-                          body:error.localizedDescription ?: @"Unknown error"];
+                          body:error.localizedDescription];
     }
 }
 
@@ -542,24 +725,31 @@ static const CGFloat kSwitchRowPad    = 18;
     } else {
         NSLog(@"DisplayDisabler: Failed to switch to HiDPI for 0x%X: %@", did, error);
         [self postNotification:@"HiDPI Switch Failed"
-                          body:error.localizedDescription ?: @"Unknown error"];
+                          body:error.localizedDescription];
     }
 }
 
-- (void)forceHiDPI:(NSMenuItem *)sender {
-    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
+- (void)forceHiDPIAtMode:(NSMenuItem *)sender {
+    NSDictionary *info = sender.representedObject;
+    DDDisplayMode *mode = info[@"mode"];
+    CGDirectDisplayID did = [info[@"displayID"] unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
 
-    [self.displayManager forceHiDPIForDisplay:did completion:^(BOOL success, NSError *error) {
+    __weak __typeof(self) weakSelf = self;
+    [self.displayManager forceHiDPIForDisplay:did atMode:mode
+                                   completion:^(BOOL success, NSError *error) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
         if (success) {
-            [self postNotification:@"HiDPI Forced"
-                              body:[NSString stringWithFormat:
-                                    @"HiDPI enabled for %@ via virtual display.", name]];
-            [self rebuildMenu];
+            NSMutableString *body = [NSMutableString stringWithFormat:
+                @"HiDPI enabled for %@ at %zu \u00D7 %zu.",
+                name, mode.pixelWidth, mode.pixelHeight];
+            [strongSelf postNotification:@"HiDPI Forced" body:body];
+            [strongSelf rebuildMenu];
         } else {
             NSLog(@"DisplayDisabler: Failed to force HiDPI for 0x%X: %@", did, error);
-            [self postNotification:@"Force HiDPI Failed"
-                              body:error.localizedDescription ?: @"Unknown error"];
+            [strongSelf postNotification:@"Force HiDPI Failed"
+                                    body:error.localizedDescription];
         }
     }];
 }
@@ -579,14 +769,32 @@ static const CGFloat kSwitchRowPad    = 18;
     }
 }
 
+- (void)setBrightness:(NSMenuItem *)sender {
+    NSDictionary *info = sender.representedObject;
+    CGDirectDisplayID did = [info[@"displayID"] unsignedIntValue];
+    uint8_t pct = (uint8_t)[info[@"percent"] unsignedCharValue];
+    NSString *name = [self.displayManager nameForDisplayID:did];
+
+    NSError *error = nil;
+    if ([[DDC shared] setBrightnessPercent:pct forDisplay:did error:&error]) {
+        [self postNotification:@"Brightness"
+                          body:[NSString stringWithFormat:@"%@ set to %u%%.", name, pct]];
+    } else {
+        NSLog(@"DisplayDisabler: Failed to set brightness on 0x%X: %@", did, error);
+        [self postNotification:@"Brightness Failed"
+                          body:error.localizedDescription];
+    }
+}
+
 // ── Settings actions ────────────────────────────────────────────────────────
 
 - (void)switchToggled:(NSSwitch *)sender {
     NSString *key = sender.identifier;
     [self flipPref:key];
 
-    if ([key isEqualToString:kAutoManage] && [self pref:kAutoManage])
+    if ([key isEqualToString:kAutoManage] && [self pref:kAutoManage]) {
         [self performAutoDisableIfNeeded];
+    }
 }
 
 - (void)loginSwitchToggled:(NSSwitch *)sender {
@@ -594,12 +802,11 @@ static const CGFloat kSwitchRowPad    = 18;
     NSError *error = nil;
 
     if (service.status == SMAppServiceStatusEnabled) {
-        [service unregisterAndReturnError:&error];
-        if (error)
+        if (![service unregisterAndReturnError:&error]) {
             NSLog(@"DisplayDisabler: Failed to unregister login item: %@", error);
+        }
     } else {
-        BOOL success = [service registerAndReturnError:&error];
-        if (!success) {
+        if (![service registerAndReturnError:&error]) {
             NSLog(@"DisplayDisabler: Failed to register login item: %@", error);
             if (service.status == SMAppServiceStatusRequiresApproval) {
                 [SMAppService openSystemSettingsLoginItems];
@@ -615,16 +822,16 @@ static const CGFloat kSwitchRowPad    = 18;
     NSString *key = sender.representedObject;
     [self flipPref:key];
     sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
-}
-
-- (void)toggleCheckSettingAndRebuild:(NSMenuItem *)sender {
-    [self toggleCheckSetting:sender];
-    [self rebuildMenu];
+    // kShowResolutions changes the menu's structure, not just a checkmark state.
+    if ([key isEqualToString:kShowResolutions]) [self rebuildMenu];
+    if ([key isEqualToString:kHideNotch])       [self updateNotchOverlay];
 }
 
 // ── Confirmation dialog ─────────────────────────────────────────────────────
 
-- (BOOL)confirmAction:(NSString *)message info:(NSString *)info {
+- (BOOL)confirmDestructive:(NSString *)message
+                      info:(NSString *)info
+                actionName:(NSString *)actionName {
     if (@available(macOS 14.0, *)) {
         [NSApp activate];
     } else {
@@ -635,7 +842,7 @@ static const CGFloat kSwitchRowPad    = 18;
     alert.messageText = message;
     alert.informativeText = info;
     alert.alertStyle = NSAlertStyleWarning;
-    [alert addButtonWithTitle:@"Disable"];
+    [alert addButtonWithTitle:actionName];
     [alert addButtonWithTitle:@"Cancel"];
 
     return [alert runModal] == NSAlertFirstButtonReturn;
@@ -654,7 +861,7 @@ static const CGFloat kSwitchRowPad    = 18;
     if ([self.displayManager disableDisplay:builtIn.displayID error:&error]) {
         [self postNotification:@"Built-in Display Disabled"
                           body:@"External monitor detected."
-                    identifier:@"auto-manage"];
+                    identifier:kAutoManageNotifID];
     } else {
         NSLog(@"DisplayDisabler: Auto-disable failed: %@", error);
     }
@@ -672,7 +879,7 @@ static const CGFloat kSwitchRowPad    = 18;
     if ([self.displayManager enableDisplay:builtIn.displayID error:&error]) {
         [self postNotification:@"Built-in Display Re-enabled"
                           body:@"No external monitor detected."
-                    identifier:@"auto-manage"];
+                    identifier:kAutoManageNotifID];
     } else {
         NSLog(@"DisplayDisabler: Auto-reenable failed: %@", error);
     }
