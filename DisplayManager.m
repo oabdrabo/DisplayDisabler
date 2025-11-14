@@ -754,30 +754,39 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 - (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes {
     if (modes.count == 0) return @[];
 
-    // Pixel sizes that already have at least one native HiDPI mode — skip.
-    NSMutableSet<NSString *> *nativeHiDPIPixelKeys = [NSMutableSet set];
+    // One representative per distinct pixel size. Prefer a Standard mode (the
+    // panel already drives that pixel count 1:1, which is what we want before
+    // mirror+switch). Fall back to a HiDPI representative if no Standard exists
+    // for that size. Among ties, pick the highest refresh.
+    NSMutableDictionary<NSString *, DDDisplayMode *> *byPixel = [NSMutableDictionary dictionary];
     for (DDDisplayMode *m in modes) {
-        if (m.isHiDPI) {
-            [nativeHiDPIPixelKeys addObject:
-                [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight]];
-        }
-    }
-
-    // For each eligible pixel size, pick the highest-refresh Standard mode.
-    NSMutableDictionary<NSString *, DDDisplayMode *> *bestByPixel = [NSMutableDictionary dictionary];
-    for (DDDisplayMode *m in modes) {
-        if (m.isHiDPI) continue;
         NSString *key = [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight];
-        if ([nativeHiDPIPixelKeys containsObject:key]) continue;
-        DDDisplayMode *cur = bestByPixel[key];
-        if (!cur || m.refreshRate > cur.refreshRate) bestByPixel[key] = m;
+        DDDisplayMode *cur = byPixel[key];
+        if (!cur) { byPixel[key] = m; continue; }
+        BOOL curIsStd = !cur.isHiDPI, mIsStd = !m.isHiDPI;
+        if (curIsStd != mIsStd) { if (mIsStd) byPixel[key] = m; continue; }
+        if (m.refreshRate > cur.refreshRate) byPixel[key] = m;
     }
 
-    return [bestByPixel.allValues sortedArrayUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
+    return [byPixel.allValues sortedArrayUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
         if (a.pixelWidth  != b.pixelWidth)  return (a.pixelWidth  < b.pixelWidth)  ? NSOrderedDescending : NSOrderedAscending;
         if (a.pixelHeight != b.pixelHeight) return (a.pixelHeight < b.pixelHeight) ? NSOrderedDescending : NSOrderedAscending;
         return NSOrderedSame;
     }];
+}
+
+- (NSSet<NSString *> *)nativeHiDPIPixelKeysFromModes:(NSArray<DDDisplayMode *> *)modes {
+    NSMutableSet<NSString *> *set = [NSMutableSet set];
+    for (DDDisplayMode *m in modes) {
+        if (m.isHiDPI) {
+            [set addObject:[NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight]];
+        }
+    }
+    return set;
+}
+
+- (DDDisplayMode *)forcedTargetForDisplay:(CGDirectDisplayID)displayID {
+    return self.forceActiveTargets[@(displayID)];
 }
 
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
