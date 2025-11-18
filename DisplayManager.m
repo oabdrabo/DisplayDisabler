@@ -632,11 +632,10 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
                                 @"HiDPI is already being forced for this display."));
         return;
     }
-    if (targetMode && !targetMode.modeRef) {
-        deliver(NO, ddMakeError(DDErrorInvalidMode, @"Invalid display mode."));
-        return;
-    }
-
+    // targetMode with nil modeRef is a synthetic target (e.g. a common HiDPI
+    // preset like 1920×1080 that isn't in the panel's advertised mode list):
+    // we use its pixel dimensions for the virtual display but skip the panel
+    // mode switch — macOS will scale the mirror to whatever the panel is on.
     // Resolve target pixel size.
     size_t pixelWidth = 0, pixelHeight = 0;
     if (targetMode) {
@@ -654,10 +653,10 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         CGDisplayModeRelease(curMode);
     }
 
-    // Capture the current mode for restore-on-stop (only if we're actually
-    // switching — i.e. targetMode provided and different from current).
+    // Capture the current mode for restore-on-stop — only relevant when we're
+    // actually going to switch the panel (real modeRef present).
     DDDisplayMode *preForce = nil;
-    if (targetMode) {
+    if (targetMode && targetMode.modeRef) {
         for (DDDisplayMode *m in [self modesForDisplay:displayID]) {
             if (m.isCurrent) { preForce = m; break; }
         }
@@ -688,8 +687,10 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     } error:&mirrorError];
     if (!mirrored) { deliver(NO, mirrorError); return; }
 
-    // THEN switch the panel to the target mode (if any, and not already there).
-    if (targetMode) {
+    // THEN switch the panel to the target mode — only if a concrete mode was
+    // requested (real modeRef) and the panel isn't already on it. Synthetic
+    // targets (custom pixel sizes with no modeRef) leave the panel alone.
+    if (targetMode && targetMode.modeRef) {
         CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
         BOOL alreadyOnTarget = NO;
         if (curMode) {

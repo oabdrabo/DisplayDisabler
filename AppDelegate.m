@@ -36,6 +36,26 @@ static const NSUInteger kModeColPixels  = 17;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
+// Common HiDPI logical resolutions the user can force on any display, even
+// when the panel doesn't advertise them as a mode. These go through the
+// virtual-display path — macOS scales the mirror to the panel's real pixels.
+static const struct { size_t w, h; } kCommonHiDPIResolutions[] = {
+    {1280,  800},
+    {1440,  900},
+    {1600, 1000},
+    {1680, 1050},
+    {1920, 1080},
+    {1920, 1200},
+    {2048, 1280},
+    {2560, 1440},
+    {2560, 1600},
+    {3008, 1692},
+    {3456, 2160},
+    {3840, 2160},
+};
+static const size_t kCommonHiDPICount =
+    sizeof kCommonHiDPIResolutions / sizeof *kCommonHiDPIResolutions;
+
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
@@ -475,10 +495,70 @@ static const NSUInteger kModeColType    = 10;
         [submenu addItem:item];
     }
 
+    // Common HiDPI presets: pixel sizes not in the panel's mode list, but that
+    // the virtual-display pipeline can still render at (macOS scales the
+    // mirror). Built as synthetic DDDisplayMode objects with modeRef=nil so
+    // forceHiDPIForDisplay:atMode:completion: skips the panel mode switch.
+    [submenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *commonHeader = [[NSMenuItem alloc]
+        initWithTitle:@"Common HiDPI resolutions" action:nil keyEquivalent:@""];
+    commonHeader.enabled = NO;
+    [submenu addItem:commonHeader];
+
+    // Build a set of pixel keys already listed above so we don't duplicate
+    // entries that happen to match one of the panel's advertised sizes.
+    NSMutableSet<NSString *> *advertisedKeys = [NSMutableSet set];
+    for (DDDisplayMode *mode in candidates) {
+        [advertisedKeys addObject:
+            [NSString stringWithFormat:@"%zu_%zu", mode.pixelWidth, mode.pixelHeight]];
+    }
+
+    for (size_t i = 0; i < kCommonHiDPICount; i++) {
+        size_t pw = kCommonHiDPIResolutions[i].w;
+        size_t ph = kCommonHiDPIResolutions[i].h;
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu", pw, ph];
+        if ([advertisedKeys containsObject:key]) continue;
+
+        DDDisplayMode *synthetic = [[DDDisplayMode alloc] init];
+        synthetic.pixelWidth    = pw;
+        synthetic.pixelHeight   = ph;
+        synthetic.logicalWidth  = pw;
+        synthetic.logicalHeight = ph;
+        synthetic.refreshRate   = 0;
+        synthetic.isHiDPI       = NO;
+        synthetic.modeRef       = NULL;
+
+        NSString *pixelStr = [[NSString stringWithFormat:@"%zu \u00D7 %zu", pw, ph]
+                              stringByPaddingToLength:kPixelColWidth
+                                          withString:@" " startingAtIndex:0];
+        NSString *gap = [@"" stringByPaddingToLength:kHzColWidth
+                                           withString:@" " startingAtIndex:0];
+        NSString *line = [NSString stringWithFormat:@"%@%@\u2295 custom",
+                          pixelStr, gap];
+
+        BOOL isCurrent = (currentlyForced &&
+                          currentlyForced.pixelWidth  == pw &&
+                          currentlyForced.pixelHeight == ph);
+
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:line
+                   action:isCurrent ? nil : @selector(forceHiDPIAtMode:)
+            keyEquivalent:@""];
+        item.target = self;
+        item.enabled = !isCurrent;
+        item.representedObject = @{ @"displayID": @(displayID), @"mode": synthetic };
+        item.attributedTitle = [[NSAttributedString alloc]
+            initWithString:line
+                attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
+        if (isCurrent) item.state = NSControlStateValueOn;
+        [submenu addItem:item];
+    }
+
     [submenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *legend = [[NSMenuItem alloc]
-        initWithTitle:@"\u25CE native: HiDPI mode already exists \u2014 "
-                      @"\u26A1 force: Standard-only pixel size"
+        initWithTitle:@"\u25CE native  \u2014  "
+                      @"\u26A1 force  \u2014  "
+                      @"\u2295 custom (virtual-only)"
                action:nil keyEquivalent:@""];
     legend.enabled = NO;
     [submenu addItem:legend];
