@@ -40,20 +40,37 @@ extern CFDictionaryRef CoreDisplay_DisplayCreateInfoDictionary(CGDirectDisplayID
 
 // DisplayServices private: built-in-panel brightness control. Looked up
 // dynamically so we don't hard-link a private framework.
-typedef int (*DSSetBrightnessFn)(CGDirectDisplayID displayID, float brightness);
+typedef int (*DSSetFn)(CGDirectDisplayID, float);
+typedef int (*DSGetFn)(CGDirectDisplayID, float *);
+typedef int (*DSCanChangeFn)(CGDirectDisplayID);
 
-static DSSetBrightnessFn dsSetBrightness(void) {
-    static DSSetBrightnessFn fn = NULL;
+// Resolves the whole DisplayServices brightness surface in one dispatch_once
+// so the dlopen + dlsym cost is paid at most once per process. The smooth
+// variant is preferred for -set because it reproduces the fade animation
+// Apple's F1/F2 keys drive (instant SetBrightness is visually jarring at
+// large deltas). If SetBrightnessSmooth is missing on some future macOS,
+// we gracefully fall back to SetBrightness.
+typedef struct {
+    DSSetFn         set;
+    DSSetFn         setSmooth;
+    DSGetFn         get;
+    DSCanChangeFn   canChange;
+} DSBrightnessFns;
+
+static DSBrightnessFns dsBrightness(void) {
+    static DSBrightnessFns f = {0};
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        void *handle = dlopen(
+        void *h = dlopen(
             "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices",
             RTLD_LAZY);
-        if (handle) {
-            fn = (DSSetBrightnessFn)dlsym(handle, "DisplayServicesSetBrightness");
-        }
+        if (!h) return;
+        f.set       = (DSSetFn)dlsym(h, "DisplayServicesSetBrightness");
+        f.setSmooth = (DSSetFn)dlsym(h, "DisplayServicesSetBrightnessSmooth");
+        f.get       = (DSGetFn)dlsym(h, "DisplayServicesGetBrightness");
+        f.canChange = (DSCanChangeFn)dlsym(h, "DisplayServicesCanChangeBrightness");
     });
-    return fn;
+    return f;
 }
 
 // ── Error domain + DDC constants ───────────────────────────────────────────
@@ -198,7 +215,8 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
 - (BOOL)setBrightnessViaDisplayServices:(uint8_t)percent
                              forDisplay:(CGDirectDisplayID)displayID
                                   error:(NSError **)error {
-    DSSetBrightnessFn setFn = dsSetBrightness();
+    DSBrightnessFns f = dsBrightness();
+    DSSetFn setFn = f.setSmooth ?: f.set;
     if (!setFn) {
         if (error) *error = brightnessError(-1,
             @"DisplayServices is unavailable on this macOS version.");
@@ -218,9 +236,25 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
 
 - (BOOL)supportsBrightness:(CGDirectDisplayID)displayID {
     if (CGDisplayIsBuiltin(displayID)) {
-        return dsSetBrightness() != NULL;
+        DSBrightnessFns f = dsBrightness();
+        if (!f.set && !f.setSmooth) return NO;
+        // CanChangeBrightness is the authoritative capability check; some
+        // panels (e.g. external Apple-branded displays) advertise
+        // DisplayServices but refuse writes.
+        return f.canChange ? (f.canChange(displayID) != 0) : YES;
     }
     return [self serviceFor:displayID] != NULL;
+}
+
+- (int)brightnessPercentForDisplay:(CGDirectDisplayID)displayID {
+    if (!CGDisplayIsBuiltin(displayID)) return -1;
+    DSBrightnessFns f = dsBrightness();
+    if (!f.get) return -1;
+    float v = -1;
+    if (f.get(displayID, &v) != 0) return -1;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    return (int)lroundf(v * 100.0f);
 }
 
 - (void)invalidateServiceCache {

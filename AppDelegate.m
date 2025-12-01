@@ -336,6 +336,16 @@ static const NSUInteger kModeColType    = 10;
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
+    // Current-level header, when the display reports a readable brightness
+    // (built-in via DisplayServicesGetBrightness). DDC reads over IOAVService
+    // are fragile so we don't expose them here.
+    int cur = [[Brightness shared] brightnessPercentForDisplay:displayID];
+    if (cur >= 0) {
+        [self addLabelToMenu:submenu
+                       title:[NSString stringWithFormat:@"Currently %d%%", cur]];
+        [submenu addItem:[NSMenuItem separatorItem]];
+    }
+
     static const uint8_t levels[] = {10, 25, 50, 75, 100};
     for (size_t i = 0; i < sizeof levels / sizeof *levels; i++) {
         NSMenuItem *item = [[NSMenuItem alloc]
@@ -345,6 +355,10 @@ static const NSUInteger kModeColType    = 10;
         item.target = self;
         item.representedObject = @{ @"displayID": @(displayID),
                                     @"percent":   @(levels[i]) };
+        // Checkmark the level closest to the current reading (within ±5%).
+        if (cur >= 0 && abs((int)levels[i] - cur) <= 5) {
+            item.state = NSControlStateValueOn;
+        }
         [submenu addItem:item];
     }
     return submenu;
