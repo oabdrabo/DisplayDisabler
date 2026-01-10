@@ -539,11 +539,16 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
     Class modeClass     = NSClassFromString(@"CGVirtualDisplayMode");
 
+    // CGVirtualDisplayMode.width/height are LOGICAL (points), not pixels —
+    // hiDPI=1 then gives a 2× pixel backing. Passing (pw*2, ph*2) would make
+    // the virtual logical = 2×target (huge workspace) which creates phantom
+    // dead zones at the cursor edges where the mirrored physical panel can't
+    // reach. Single mode at (pw, ph) matches force-hidpi's own pattern and
+    // gives virtual logical = target exactly.
     CGVirtualDisplaySettings *settings = [[settingsClass alloc] init];
     settings.hiDPI = 1;
     settings.modes = @[
-        [[modeClass alloc] initWithWidth:pw * 2 height:ph * 2 refreshRate:60.0],
-        [[modeClass alloc] initWithWidth:pw     height:ph     refreshRate:60.0],
+        [[modeClass alloc] initWithWidth:pw height:ph refreshRate:60.0],
     ];
 
     CGVirtualDisplay *vd = self.sharedVirtualDisplay;
