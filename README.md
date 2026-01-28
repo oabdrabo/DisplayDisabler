@@ -59,7 +59,3 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Author
-
-[Omar Abdrabo](https://github.com/oabdrabo) · [LinkedIn](https://linkedin.com/in/oabdrabo)
