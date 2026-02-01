@@ -8,6 +8,7 @@
 #import <IOKit/IOKitLib.h>
 #import <IOKit/graphics/IOGraphicsLib.h>
 #include <math.h>
+#include <os/log.h>
 
 NSErrorDomain const DDErrorDomain = @"com.local.DisplayDisabler";
 
@@ -18,7 +19,12 @@ static const NSTimeInterval kDDCoalesceInterval = 0.5;
 
 // Timeout while polling for a freshly-created virtual display to appear in
 // CGGetOnlineDisplayList. Beyond this we give up and report the failure.
-static const NSTimeInterval kDDVirtualOnlineTimeout = 5.0;
+// Observed on macOS 26 Apple Silicon: applySettings returns success almost
+// immediately but the VD can take 4–6 seconds to actually register in
+// CGGetOnlineDisplayList (SkyLight fires its display-system-state-change
+// notifications that late). 5s was right at the edge and sometimes lost
+// the race — bumped to 15s for headroom.
+static const NSTimeInterval kDDVirtualOnlineTimeout = 15.0;
 
 // ── CGVirtualDisplay private API (macOS 14+, resolved at runtime) ───────────
 
@@ -143,6 +149,17 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 // but a pathological run where macOS keeps overriding our pin could oscillate.
 // This flag is a hard cap: only one realign runs at a time.
 @property (nonatomic) BOOL realignInFlight;
+// Set YES during a force-apply critical section (from top of
+// forceHiDPIForDisplay: until we deliver the completion). While set:
+//   - the coalesced reconfig handler re-enqueues itself instead of running
+//     prune+realign — avoiding nested CGBeginDisplayConfiguration;
+//   - the VD termination handler defers clearing state until the apply
+//     returns, so we don't race half-applied state against a VD that's
+//     about to be nilled out.
+// The wait-for-VD-online must pump the main runloop (CGVirtualDisplay's
+// registration XPC requires it); this flag is what makes that pump safe.
+@property (nonatomic) BOOL applyingForce;
+@property (nonatomic) BOOL vdTerminationDeferred;
 - (void)scheduleChangeNotification;
 - (void)handleSharedVirtualDisplayTerminated;
 - (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
@@ -184,12 +201,16 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     CGDisplayConfigRef config;
     CGError err = CGBeginDisplayConfiguration(&config);
     if (err != kCGErrorSuccess) {
+        os_log(OS_LOG_DEFAULT,
+               "DisplayDisabler: CGBeginDisplayConfiguration → CGError %{public}d", (int)err);
         if (error) *error = ddMakeCGError(err, @"Failed to begin display configuration");
         return NO;
     }
 
     err = block(config);
     if (err != kCGErrorSuccess) {
+        os_log(OS_LOG_DEFAULT,
+               "DisplayDisabler: display-config block → CGError %{public}d", (int)err);
         CGCancelDisplayConfiguration(config);
         if (error) *error = ddMakeCGError(err, @"Display configuration step failed");
         return NO;
@@ -197,6 +218,8 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
     err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     if (err != kCGErrorSuccess) {
+        os_log(OS_LOG_DEFAULT,
+               "DisplayDisabler: CGCompleteDisplayConfiguration → CGError %{public}d", (int)err);
         CGCancelDisplayConfiguration(config);
         if (error) *error = ddMakeCGError(err, @"Failed to commit display configuration");
         return NO;
@@ -214,6 +237,15 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 
 - (void)handleSharedVirtualDisplayTerminated {
     if (!self.sharedVirtualDisplay) return;
+    // Defer state clear if a force-apply is mid-flight — clearing sharedVD /
+    // forcedPhysical / preForceMode while the apply still holds references
+    // to them would corrupt the apply's outcome. The apply itself will
+    // notice the VD is gone (mirror / mode CG calls will fail) and the
+    // force will return an error; after it returns, we re-run cleanup.
+    if (self.applyingForce) {
+        self.vdTerminationDeferred = YES;
+        return;
+    }
     self.sharedVirtualDisplay = nil;
     self.forcedPhysical   = kCGNullDirectDisplay;
     self.forcedTarget     = nil;
@@ -568,44 +600,31 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return found;
 }
 
-// Signal-only reconfig callback: wakes a dispatch_semaphore so the waiter
-// can re-check the online list without pumping a runloop.
-static void ddWaitSignalCallback(CGDirectDisplayID display __unused,
-                                  CGDisplayChangeSummaryFlags flags,
-                                  void *userInfo) {
-    if (flags & kCGDisplayBeginConfigurationFlag) return;
-    dispatch_semaphore_t sem = (__bridge dispatch_semaphore_t)userInfo;
-    dispatch_semaphore_signal(sem);
-}
-
 // Wait until `vdID` appears in CGGetOnlineDisplayList, or timeout.
-// Previously this pumped the main runloop between probes — which let the
-// coalesced reconfig handler, the VD termination handler (desc.queue = main),
-// and any queued main work fire MID force-apply, re-entering display-config
-// transactions that the caller still had open. Now we block on a semaphore
-// signalled by a one-shot reconfig callback on the CG thread, so main is
-// held in one atomic sequence from force-start to force-end.
+//
+// Why we pump the main runloop here (on purpose):
+// CGVirtualDisplay's registration with windowserver involves an XPC round-
+// trip that requires the CLIENT's main runloop to process a queued callback
+// before SkyLight publishes the display into CGGetOnlineDisplayList. A hard
+// dispatch_semaphore_wait on main deadlocks that handshake — the VD stays
+// unregistered until main unblocks at timeout. Runloop pumping lets the XPC
+// callback run.
+//
+// Why this doesn't cause the re-entry hazard it used to:
+// Our own coalesced reconfig handler (scheduleChangeNotification) and the
+// VD termination handler (desc.queue = main) ARE dispatched to main, so
+// they can fire during a runloop pump. We gate them with `applyingForce`,
+// which is set YES around the force-apply critical section — while set,
+// those handlers re-enqueue themselves instead of executing, so no nested
+// CGBeginDisplayConfiguration can happen and no state-clearing handler
+// runs mid-transaction.
 - (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
-    if ([self isDisplayIDOnline:vdID]) return YES;
-
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    void *ctx = (__bridge void *)sem;
-    if (CGDisplayRegisterReconfigurationCallback(ddWaitSignalCallback, ctx) != kCGErrorSuccess) {
-        // Registration failed: sleep once for the whole timeout then check.
-        // Better than polling; worst case still bounded by `timeout`.
-        [NSThread sleepForTimeInterval:timeout];
-        return [self isDisplayIDOnline:vdID];
-    }
-
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
-    while (![self isDisplayIDOnline:vdID]) {
-        NSTimeInterval remaining = [deadline timeIntervalSinceNow];
-        if (remaining <= 0) break;
-        dispatch_semaphore_wait(sem,
-            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)));
+    while ([deadline compare:[NSDate date]] == NSOrderedDescending) {
+        if ([self isDisplayIDOnline:vdID]) return YES;
+        [[NSRunLoop mainRunLoop]
+            runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     }
-
-    CGDisplayRemoveReconfigurationCallback(ddWaitSignalCallback, ctx);
     return [self isDisplayIDOnline:vdID];
 }
 
@@ -745,7 +764,21 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
 - (void)forceHiDPIForDisplay:(CGDirectDisplayID)displayID
                       atMode:(DDDisplayMode *)targetMode
                   completion:(DDForceHiDPICompletion)completion {
+    // Gate coalesced reconfig handler and VD termination handler off for
+    // the duration of the apply (see `applyingForce` doc). The `deliver`
+    // wrapper below clears the gate and flushes any deferred termination
+    // that accumulated during the apply.
+    self.applyingForce = YES;
+    __weak __typeof(self) weakSelf = self;
     DDForceHiDPICompletion deliver = ^(BOOL success, NSError *error) {
+        __strong __typeof(weakSelf) strong = weakSelf;
+        if (strong) {
+            strong.applyingForce = NO;
+            if (strong.vdTerminationDeferred) {
+                strong.vdTerminationDeferred = NO;
+                [strong handleSharedVirtualDisplayTerminated];
+            }
+        }
         if (!completion) return;
         dispatch_async(dispatch_get_main_queue(), ^{ completion(success, error); });
     };
@@ -901,10 +934,28 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
         return;
     }
 
-    // Re-validate that the target physical is still connected. The VD create +
-    // online-wait introduces a window (up to kDDVirtualOnlineTimeout) in which
-    // the user could unplug the display — continuing into mirror with a stale
-    // ID would fail confusingly, or worse, mirror into nothing.
+    // When a CGVirtualDisplay comes online, macOS auto-places it at (0, 0),
+    // which is exactly where the target's pre-force origin usually is (main
+    // or built-in). macOS resolves the origin collision by deactivating one
+    // of the two, and since the VD was just registered it wins — the
+    // physical goes "inactive" in CGGetActiveDisplayList, and every
+    // subsequent operation on the physical (mirror, enable, etc.) fails
+    // confusingly.
+    // Fix: move the VD to the right of the target's pre-force bounds the
+    // instant it's online, clearing the (0,0) slot. The physical then
+    // reactivates, mirror sets up cleanly, and the final topology-alignment
+    // transaction will re-place the VD at the target's origin at the end
+    // of the apply. This early move is purely to release the collision.
+    int32_t parkedX = (int32_t)(preForceBounds.origin.x + preForceBounds.size.width);
+    int32_t parkedY = (int32_t)preForceBounds.origin.y;
+    [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+        return CGConfigureDisplayOrigin(config, virtualID, parkedX, parkedY);
+    } error:NULL];
+
+    // Now that the VD is parked away from (0,0), re-validate that the target
+    // is actually still connected. If it's still inactive it wasn't the
+    // collision — the user genuinely unplugged the display during the
+    // wait, and continuing into mirror on a ghost ID would fail confusingly.
     if (!CGDisplayIsActive(displayID)) {
         deliver(NO, ddMakeError(DDErrorNotForced,
                                 @"Target display disconnected before the force could be applied."));
@@ -1301,9 +1352,18 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                  (int64_t)(kDDCoalesceInterval * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        if (token == self.coalesceToken && self.changeHandler) {
-            self.changeHandler();
+        if (token != self.coalesceToken) return;
+        // Defer if a force-apply is mid-flight. Re-enqueue ourselves so the
+        // handler (prune + realign + menu rebuild) eventually runs after the
+        // apply returns. This is what makes it safe for waitForVirtualDisplay-
+        // Online to pump the runloop — the coalesced handler that would
+        // otherwise fire here (and call performDisplayConfig inside an open
+        // apply transaction) just reschedules itself instead.
+        if (self.applyingForce) {
+            [self scheduleChangeNotification];
+            return;
         }
+        if (self.changeHandler) self.changeHandler();
     });
 }
 
