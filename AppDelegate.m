@@ -659,7 +659,11 @@ static const size_t kCommonHiDPICount =
         NSString *logicalCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
             mode.logicalWidth, mode.logicalHeight]
             stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0];
-        NSString *typeCol = [(mode.isHiDPI ? @"HiDPI" : @"Standard")
+        // Pad Type column by 1 extra char so the "★" marker fits without
+        // shifting the Rate column — keeps monospaced alignment intact.
+        NSString *typeBase = mode.isHiDPI ? @"HiDPI" : @"Standard";
+        NSString *typeCol = [[NSString stringWithFormat:@"%@ %@",
+            typeBase, mode.isDefaultForDisplay ? @"\u2605" : @" "]
             stringByPaddingToLength:kModeColType withString:@" " startingAtIndex:0];
 
         NSString *line = [NSString stringWithFormat:@"%@%@%@%@",
@@ -689,6 +693,12 @@ static const size_t kCommonHiDPICount =
                action:nil keyEquivalent:@""];
     countItem.enabled = NO;
     [submenu addItem:countItem];
+
+    NSMenuItem *legend = [[NSMenuItem alloc]
+        initWithTitle:@"\u2605 panel-native (no scaling, crispest)"
+               action:nil keyEquivalent:@""];
+    legend.enabled = NO;
+    [submenu addItem:legend];
 
     return submenu;
 }

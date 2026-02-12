@@ -392,17 +392,18 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         [seen addObject:key];
 
         DDDisplayMode *m = [[DDDisplayMode alloc] init];
-        m.pixelWidth    = pw;
-        m.pixelHeight   = ph;
-        m.logicalWidth  = lw;
-        m.logicalHeight = lh;
-        m.refreshRate   = hz;
-        m.isHiDPI       = hidpi;
-        m.modeRef       = mode;
-        m.isCurrent     = (pw == curPW && ph == curPH &&
-                           lw == curLW && lh == curLH &&
-                           flags == curFlags &&
-                           fabs(hz - curRate) < 1.0);
+        m.pixelWidth          = pw;
+        m.pixelHeight         = ph;
+        m.logicalWidth        = lw;
+        m.logicalHeight       = lh;
+        m.refreshRate         = hz;
+        m.isHiDPI             = hidpi;
+        m.modeRef             = mode;
+        m.isDefaultForDisplay = (flags & 0x04) != 0;  // kDisplayModeDefaultFlag
+        m.isCurrent           = (pw == curPW && ph == curPH &&
+                                 lw == curLW && lh == curLH &&
+                                 flags == curFlags &&
+                                 fabs(hz - curRate) < 1.0);
 
         [result addObject:m];
     }

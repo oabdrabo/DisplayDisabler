@@ -56,6 +56,10 @@ typedef NS_ERROR_ENUM(DDErrorDomain, DDErrorCode) {
 @property (nonatomic) double refreshRate;
 @property (nonatomic) BOOL isHiDPI;
 @property (nonatomic) BOOL isCurrent;
+// Panel's "Default for display" mode — the one whose pixel backing exactly
+// matches the hardware's native pixel count, i.e. zero-scaling and crispest
+// possible rendering. Derived from CGDisplayMode's kDisplayModeDefaultFlag.
+@property (nonatomic) BOOL isDefaultForDisplay;
 @property (nonatomic, nullable) CGDisplayModeRef modeRef;  // retained for setMode
 @end
 
