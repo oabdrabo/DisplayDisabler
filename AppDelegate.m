@@ -314,18 +314,10 @@ static const CGFloat kSwitchRowPad    = 18;
     NSView *row = [[NSView alloc] initWithFrame:
                    NSMakeRect(0, 0, kSwitchRowWidth, kSwitchRowHeight)];
 
-    NSTextField *label = [NSTextField labelWithString:title];
-    label.font = [NSFont menuFontOfSize:13];
-    [label sizeToFit];
-    label.frame = NSMakeRect(kSwitchRowPad,
-                             (kSwitchRowHeight - label.frame.size.height) / 2,
-                             kSwitchRowWidth - 80, label.frame.size.height);
-    [row addSubview:label];
-
     NSSwitch *sw = [[NSSwitch alloc] init];
     sw.controlSize = NSControlSizeMini;
     [sw sizeToFit];
-    sw.frame = NSMakeRect(kSwitchRowWidth - sw.frame.size.width - kSwitchRowPad,
+    sw.frame = NSMakeRect(kSwitchRowWidth - kSwitchRowPad - sw.frame.size.width,
                           (kSwitchRowHeight - sw.frame.size.height) / 2,
                           sw.frame.size.width, sw.frame.size.height);
     sw.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
@@ -333,6 +325,15 @@ static const CGFloat kSwitchRowPad    = 18;
     sw.action = @selector(switchToggled:);
     sw.identifier = key;
     [row addSubview:sw];
+
+    NSTextField *label = [NSTextField labelWithString:title];
+    label.font = [NSFont menuFontOfSize:13];
+    [label sizeToFit];
+    label.frame = NSMakeRect(kSwitchRowPad,
+                             (kSwitchRowHeight - label.frame.size.height) / 2,
+                             kSwitchRowWidth - kSwitchRowPad * 2 - sw.frame.size.width - 8,
+                             label.frame.size.height);
+    [row addSubview:label];
 
     item.view = row;
     return item;
@@ -344,18 +345,10 @@ static const CGFloat kSwitchRowPad    = 18;
     NSView *row = [[NSView alloc] initWithFrame:
                    NSMakeRect(0, 0, kSwitchRowWidth, kSwitchRowHeight)];
 
-    NSTextField *label = [NSTextField labelWithString:@"Launch at Login"];
-    label.font = [NSFont menuFontOfSize:13];
-    [label sizeToFit];
-    label.frame = NSMakeRect(kSwitchRowPad,
-                             (kSwitchRowHeight - label.frame.size.height) / 2,
-                             kSwitchRowWidth - 80, label.frame.size.height);
-    [row addSubview:label];
-
     NSSwitch *sw = [[NSSwitch alloc] init];
     sw.controlSize = NSControlSizeMini;
     [sw sizeToFit];
-    sw.frame = NSMakeRect(kSwitchRowWidth - sw.frame.size.width - kSwitchRowPad,
+    sw.frame = NSMakeRect(kSwitchRowWidth - kSwitchRowPad - sw.frame.size.width,
                           (kSwitchRowHeight - sw.frame.size.height) / 2,
                           sw.frame.size.width, sw.frame.size.height);
     sw.target = self;
@@ -365,7 +358,16 @@ static const CGFloat kSwitchRowPad    = 18;
     sw.state = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled)
                ? NSControlStateValueOn : NSControlStateValueOff;
 
+    NSTextField *label = [NSTextField labelWithString:@"Launch at Login"];
+    label.font = [NSFont menuFontOfSize:13];
+    [label sizeToFit];
+    label.frame = NSMakeRect(kSwitchRowPad,
+                             (kSwitchRowHeight - label.frame.size.height) / 2,
+                             kSwitchRowWidth - kSwitchRowPad * 2 - sw.frame.size.width - 8,
+                             label.frame.size.height);
+
     [row addSubview:sw];
+    [row addSubview:label];
     item.view = row;
     return item;
 }
