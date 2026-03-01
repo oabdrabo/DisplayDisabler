@@ -41,10 +41,9 @@ DisplayDisabler v3.0
   Disable This Display
 ─────────────────────────────────────────────
 ▶ Settings
-  ├── ☑ Auto-disable built-in
-  ├── ☑ Auto-re-enable built-in
-  ├── ☑ Notifications
-  ├── ☐ Ask before disabling
+  ├── ☐ Turn off laptop screen when external monitor is connected
+  ├── ☑ Show notifications
+  ├── ☐ Ask before disabling a display
   ├── ☑ Show all resolutions
   └── ☐ Launch at Login
 ─────────────────────────────────────────────

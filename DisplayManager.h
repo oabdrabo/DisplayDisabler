@@ -39,6 +39,7 @@ extern CGError CGSConfigureDisplayEnabled(CGDisplayConfigRef config,
 @property (nonatomic) double refreshRate;
 @property (nonatomic) BOOL isHiDPI;
 @property (nonatomic) BOOL isCurrent;
+@property (nonatomic) CGDisplayModeRef modeRef;  // retained for setMode
 @end
 
 // ── Display manager ─────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ typedef void (^DisplayChangeBlock)(void);
 // Actions
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)enableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
+- (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
 // Monitoring
 - (void)startMonitoringWithChangeHandler:(DisplayChangeBlock)handler;

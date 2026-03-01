@@ -18,6 +18,18 @@ static NSString * const kDDErrorDomain = @"com.local.DisplayDisabler";
 @end
 
 @implementation DDDisplayMode
+
+- (void)setModeRef:(CGDisplayModeRef)modeRef {
+    if (_modeRef != modeRef) {
+        if (_modeRef) CGDisplayModeRelease(_modeRef);
+        _modeRef = modeRef ? CGDisplayModeRetain(modeRef) : NULL;
+    }
+}
+
+- (void)dealloc {
+    if (_modeRef) CGDisplayModeRelease(_modeRef);
+}
+
 @end
 
 // ── DisplayManager ──────────────────────────────────────────────────────────
@@ -198,6 +210,7 @@ static void displayReconfigCallback(CGDirectDisplayID display,
         m.logicalHeight = lh;
         m.refreshRate   = hz;
         m.isHiDPI       = hidpi;
+        m.modeRef       = mode;
         m.isCurrent     = (pw == curPW && ph == curPH &&
                            lw == curLW && lh == curLH &&
                            fabs(hz - curRate) < 1.0);
@@ -300,6 +313,24 @@ static void displayReconfigCallback(CGDirectDisplayID display,
         if (error) *error = [NSError errorWithDomain:kDDErrorDomain code:err
                      userInfo:@{NSLocalizedDescriptionKey:
                      [NSString stringWithFormat:@"Failed to commit configuration (error %d)", err]}];
+        return NO;
+    }
+
+    return YES;
+}
+
+- (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
+    if (!mode.modeRef) {
+        if (error) *error = [NSError errorWithDomain:kDDErrorDomain code:-1
+                     userInfo:@{NSLocalizedDescriptionKey: @"Invalid display mode"}];
+        return NO;
+    }
+
+    CGError err = CGDisplaySetDisplayMode(displayID, mode.modeRef, NULL);
+    if (err != kCGErrorSuccess) {
+        if (error) *error = [NSError errorWithDomain:kDDErrorDomain code:err
+                     userInfo:@{NSLocalizedDescriptionKey:
+                     [NSString stringWithFormat:@"Failed to set display mode (error %d)", err]}];
         return NO;
     }
 

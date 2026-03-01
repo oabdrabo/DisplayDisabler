@@ -12,8 +12,7 @@
 
 // ── UserDefaults keys ───────────────────────────────────────────────────────
 
-static NSString * const kAutoDisable       = @"AutoDisableBuiltIn";
-static NSString * const kAutoReenable      = @"AutoReenableBuiltIn";
+static NSString * const kAutoManage        = @"AutoManageBuiltIn";
 static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
@@ -53,8 +52,7 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
 
 - (void)registerDefaults {
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-        kAutoDisable:       @NO,
-        kAutoReenable:      @YES,
+        kAutoManage:        @NO,
         kShowNotifications: @YES,
         kConfirmDisable:    @NO,
         kShowResolutions:   @YES,
@@ -224,27 +222,43 @@ static NSString * const kShowResolutions   = @"ShowResolutions";
     }
 }
 
-// ── Settings submenu (NSSwitch-based — menu stays open on toggle) ───────────
+// ── Settings submenu ─────────────────────────────────────────────────────────
 
 - (NSMenu *)buildSettingsSubmenu {
     NSMenu *settings = [[NSMenu alloc] init];
     settings.autoenablesItems = NO;
 
-    [settings addItem:[self switchItemWithTitle:@"Auto-disable built-in"
-                                            key:kAutoDisable]];
-    [settings addItem:[self switchItemWithTitle:@"Auto-re-enable built-in"
-                                            key:kAutoReenable]];
+    // Automation toggle (NSSwitch — menu stays open)
+    [settings addItem:[self switchItemWithTitle:@"Turn off laptop screen when external monitor is connected"
+                                            key:kAutoManage]];
     [settings addItem:[NSMenuItem separatorItem]];
-    [settings addItem:[self switchItemWithTitle:@"Notifications"
-                                            key:kShowNotifications]];
-    [settings addItem:[self switchItemWithTitle:@"Ask before disabling"
-                                            key:kConfirmDisable]];
-    [settings addItem:[self switchItemWithTitle:@"Show all resolutions"
-                                            key:kShowResolutions]];
+
+    // Simple preferences (checkmark — standard menu items)
+    [settings addItem:[self checkItemWithTitle:@"Show notifications"
+                                           key:kShowNotifications
+                                        action:@selector(toggleCheckSetting:)]];
+    [settings addItem:[self checkItemWithTitle:@"Ask before disabling a display"
+                                           key:kConfirmDisable
+                                        action:@selector(toggleCheckSetting:)]];
+    [settings addItem:[self checkItemWithTitle:@"Show all resolutions"
+                                           key:kShowResolutions
+                                        action:@selector(toggleCheckSettingAndRebuild:)]];
     [settings addItem:[NSMenuItem separatorItem]];
+
+    // Login toggle (NSSwitch)
     [settings addItem:[self loginSwitchItem]];
 
     return settings;
+}
+
+- (NSMenuItem *)checkItemWithTitle:(NSString *)title key:(NSString *)key action:(SEL)action {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                 action:action
+                                          keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = key;
+    item.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
+    return item;
 }
 
 static const CGFloat kSwitchRowWidth  = 290;
@@ -315,7 +329,7 @@ static const CGFloat kSwitchRowPad    = 18;
     return item;
 }
 
-// ── Modes submenu ───────────────────────────────────────────────────────────
+// ── Modes submenu (clickable — switches resolution) ─────────────────────────
 
 - (NSMenu *)buildModesSubmenuForDisplay:(CGDirectDisplayID)displayID {
     NSMenu *submenu = [[NSMenu alloc] init];
@@ -323,6 +337,7 @@ static const CGFloat kSwitchRowPad    = 18;
 
     NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:displayID];
     NSFont *mono = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSFont *monoBold = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
 
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -347,17 +362,26 @@ static const CGFloat kSwitchRowPad    = 18;
             [scaleStr UTF8String],
             rateStr];
 
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
-        item.enabled = NO;
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:@""
+                   action:mode.isCurrent ? nil : @selector(switchMode:)
+            keyEquivalent:@""];
+        item.target = self;
+        item.enabled = !mode.isCurrent;
+        item.representedObject = @{
+            @"mode": mode,
+            @"displayID": @(displayID)
+        };
         item.attributedTitle = [[NSMutableAttributedString alloc]
-            initWithString:line attributes:@{NSFontAttributeName: mono}];
+            initWithString:line
+                attributes:@{NSFontAttributeName: mode.isCurrent ? monoBold : mono}];
         if (mode.isCurrent) item.state = NSControlStateValueOn;
         [submenu addItem:item];
     }
 
     [submenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *countItem = [[NSMenuItem alloc]
-        initWithTitle:[NSString stringWithFormat:@"%lu modes total",
+        initWithTitle:[NSString stringWithFormat:@"%lu modes — click to switch",
                        (unsigned long)modes.count]
                action:nil keyEquivalent:@""];
     countItem.enabled = NO;
@@ -387,6 +411,23 @@ static const CGFloat kSwitchRowPad    = 18;
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
+
+- (void)switchMode:(NSMenuItem *)sender {
+    NSDictionary *info = sender.representedObject;
+    DDDisplayMode *mode = info[@"mode"];
+    CGDirectDisplayID did = [info[@"displayID"] unsignedIntValue];
+
+    NSError *error = nil;
+    if ([self.displayManager setMode:mode forDisplay:did error:&error]) {
+        NSString *label = mode.isHiDPI ? @"HiDPI" : @"Standard";
+        [self postNotification:@"Resolution Changed"
+                          body:[NSString stringWithFormat:@"%zu \u00D7 %zu %@ %.0fHz",
+                                mode.pixelWidth, mode.pixelHeight,
+                                label, mode.refreshRate]];
+    } else {
+        NSLog(@"DisplayDisabler: Failed to set mode: %@", error);
+    }
+}
 
 - (void)disableDisplay:(NSMenuItem *)sender {
     CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
@@ -426,10 +467,8 @@ static const CGFloat kSwitchRowPad    = 18;
     NSString *key = sender.identifier;
     [self flipPref:key];
 
-    if ([key isEqualToString:kAutoDisable] && [self pref:key])
+    if ([key isEqualToString:kAutoManage] && [self pref:kAutoManage])
         [self performAutoDisableIfNeeded];
-    if ([key isEqualToString:kAutoReenable] && [self pref:key])
-        [self performAutoReenableIfNeeded];
 }
 
 - (void)loginSwitchToggled:(NSSwitch *)sender {
@@ -456,6 +495,19 @@ static const CGFloat kSwitchRowPad    = 18;
     }
 }
 
+// ── Checkmark setting actions ────────────────────────────────────────────────
+
+- (void)toggleCheckSetting:(NSMenuItem *)sender {
+    NSString *key = sender.representedObject;
+    [self flipPref:key];
+    sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (void)toggleCheckSettingAndRebuild:(NSMenuItem *)sender {
+    [self toggleCheckSetting:sender];
+    [self rebuildMenu];
+}
+
 // ── Confirmation dialog ─────────────────────────────────────────────────────
 
 - (BOOL)confirmAction:(NSString *)message info:(NSString *)info {
@@ -478,7 +530,7 @@ static const CGFloat kSwitchRowPad    = 18;
 // ── Auto-disable logic ─────────────────────────────────────────────────────
 
 - (void)performAutoDisableIfNeeded {
-    if (![self pref:kAutoDisable]) return;
+    if (![self pref:kAutoManage]) return;
 
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
     if (!builtIn || !builtIn.isActive) return;
@@ -496,7 +548,7 @@ static const CGFloat kSwitchRowPad    = 18;
 // ── Auto-re-enable logic ────────────────────────────────────────────────────
 
 - (void)performAutoReenableIfNeeded {
-    if (![self pref:kAutoReenable]) return;
+    if (![self pref:kAutoManage]) return;
 
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
     if (!builtIn) return;
