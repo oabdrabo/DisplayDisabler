@@ -63,7 +63,3 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 [Omar Abdrabo](https://github.com/oabdrabo) · [LinkedIn](https://linkedin.com/in/oabdrabo)
-
----
-
-Built by [Omar A.](https://github.com/oabdrabo). Other work: **[PYXIS3](https://github.com/pyxis3-ai)** (vendor-neutral AI ops platform), [`vllm-bench`](https://github.com/pyxis3-ai/vllm-bench), [`lens`](https://github.com/oabdrabo/lens), [`noor`](https://github.com/oabdrabo/noor).
