@@ -1,0 +1,10 @@
+{
+  "repository": "oabdrabo/DisplayDisabler",
+  "environment": "local",
+  "logLevel": "info",
+  "checks": [
+    "documentation",
+    "configuration",
+    "release-notes"
+  ]
+}
