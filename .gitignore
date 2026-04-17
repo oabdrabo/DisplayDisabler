@@ -8,6 +8,8 @@
 *.d
 DisplayDisabler
 DisplayDisabler.app/
+AppIcon.icns
+AppIcon.iconset/
 
 # Logs
 *.log

@@ -17,7 +17,7 @@ OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
 
-.PHONY: all clean bundle sign install uninstall
+.PHONY: all clean bundle sign install uninstall icon
 
 all: bundle sign
 
@@ -29,11 +29,25 @@ all: bundle sign
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(OBJECTS) -o $@
 
-bundle: $(EXECUTABLE)
+# Render AppIcon.icns from the "display" SF Symbol on a dark rounded-rect
+# background. One-shot build-time helper; the .icns is committed to the
+# repo so CI / downstream builders don't need to re-run it.
+AppIcon.icns: build_icon.m
+	@$(CC) -fobjc-arc -O0 -mmacosx-version-min=13.0 -framework Cocoa \
+	    build_icon.m -o /tmp/dd-build-icon
+	@/tmp/dd-build-icon AppIcon.iconset
+	@iconutil -c icns AppIcon.iconset -o AppIcon.icns
+	@rm -rf AppIcon.iconset /tmp/dd-build-icon
+	@echo "Built AppIcon.icns"
+
+icon: AppIcon.icns
+
+bundle: $(EXECUTABLE) AppIcon.icns
 	@mkdir -p "$(BUNDLE)/Contents/MacOS"
 	@mkdir -p "$(BUNDLE)/Contents/Resources"
 	@cp $(EXECUTABLE) "$(BUNDLE)/Contents/MacOS/$(EXECUTABLE)"
 	@cp Info.plist "$(BUNDLE)/Contents/Info.plist"
+	@cp AppIcon.icns "$(BUNDLE)/Contents/Resources/AppIcon.icns"
 	@/bin/echo -n "APPL????" > "$(BUNDLE)/Contents/PkgInfo"
 	@echo "Built $(BUNDLE)"
 
