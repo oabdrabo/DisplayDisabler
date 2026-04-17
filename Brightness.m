@@ -223,6 +223,10 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
     return [self serviceFor:displayID] != NULL;
 }
 
+- (void)invalidateServiceCache {
+    [self.services removeAllObjects];
+}
+
 - (BOOL)setBrightnessPercent:(uint8_t)percent
                   forDisplay:(CGDirectDisplayID)displayID
                        error:(NSError **)error {

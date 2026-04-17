@@ -25,6 +25,10 @@ NS_ASSUME_NONNULL_BEGIN
                   forDisplay:(CGDirectDisplayID)displayID
                        error:(NSError **)error;
 
+// Drop the cached IOAVService handles. Call when displays come and go so
+// subsequent DDC writes don't hit a stale handle to a disconnected panel.
+- (void)invalidateServiceCache;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -87,6 +87,7 @@ static const size_t kCommonHiDPICount =
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf.displayManager pruneStaleVirtualDisplays];
+        [[Brightness shared] invalidateServiceCache];
         [strongSelf rebuildMenu];
         [strongSelf updateNotchOverlay];
         [strongSelf performAutoDisableIfNeeded];
@@ -976,8 +977,11 @@ static const size_t kCommonHiDPICount =
         if (!strongSelf) return;
         if (!ok) {
             NSLog(@"DisplayDisabler: HiDPI install failed: %@", err);
-            [strongSelf postNotification:@"Install Failed"
-                                    body:err.localizedDescription];
+            // -128 = user cancelled auth dialog — quiet path, no notification.
+            if (err.code != -128) {
+                [strongSelf postNotification:@"Install Failed"
+                                        body:err.localizedDescription];
+            }
             return;
         }
         [strongSelf rebuildMenu];
@@ -1006,8 +1010,10 @@ static const size_t kCommonHiDPICount =
         if (!strongSelf) return;
         if (!ok) {
             NSLog(@"DisplayDisabler: HiDPI uninstall failed: %@", err);
-            [strongSelf postNotification:@"Remove Failed"
-                                    body:err.localizedDescription];
+            if (err.code != -128) {
+                [strongSelf postNotification:@"Remove Failed"
+                                        body:err.localizedDescription];
+            }
             return;
         }
         [strongSelf rebuildMenu];

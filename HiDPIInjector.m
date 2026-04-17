@@ -15,6 +15,7 @@
 
 #import "HiDPIInjector.h"
 #import <AppKit/AppKit.h>
+#import <IOKit/IOKitLib.h>
 #include <arpa/inet.h>  // htonl
 
 NS_ASSUME_NONNULL_BEGIN
@@ -53,12 +54,63 @@ static NSError *injectorError(NSInteger code, NSString *message) {
     ];
 }
 
+// Windowserver matches the override plist by the display's "DisplayAttributes
+// → ProductAttributes" IDs. On Apple Silicon the built-in panel reports a
+// ProductID that is NOT the value returned by CGDisplayModelNumber (e.g. an
+// ASCII Apple codename like 0x30313441 vs CG's 0xa052). For externals with
+// EDID the two agree. So: prefer AppleCLCD2's values when available, fall
+// back to the CG API for safety (headless/virtual displays).
+- (void)productAttributesForDisplay:(CGDirectDisplayID)displayID
+                             vendor:(uint32_t *)outVendor
+                            product:(uint32_t *)outProduct {
+    uint32_t cgVendor  = CGDisplayVendorNumber(displayID);
+    uint32_t cgProduct = CGDisplayModelNumber(displayID);
+    *outVendor  = cgVendor;
+    *outProduct = cgProduct;
+
+    io_iterator_t iter = 0;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault,
+                                      IOServiceMatching("AppleCLCD2"), &iter) != KERN_SUCCESS) {
+        return;
+    }
+    io_service_t svc;
+    while ((svc = IOIteratorNext(iter))) {
+        CFMutableDictionaryRef props = NULL;
+        if (IORegistryEntryCreateCFProperties(svc, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS) {
+            CFDictionaryRef attrs = CFDictionaryGetValue(props, CFSTR("DisplayAttributes"));
+            CFDictionaryRef prod  = attrs ? CFDictionaryGetValue(attrs, CFSTR("ProductAttributes")) : NULL;
+            if (prod) {
+                uint32_t vid = 0, pid = 0;
+                CFNumberRef vn = CFDictionaryGetValue(prod, CFSTR("LegacyManufacturerID"));
+                CFNumberRef pn = CFDictionaryGetValue(prod, CFSTR("ProductID"));
+                if (vn) CFNumberGetValue(vn, kCFNumberSInt32Type, &vid);
+                if (pn) CFNumberGetValue(pn, kCFNumberSInt32Type, &pid);
+                // Match: for externals, ioreg VID/PID equals CG's. For the
+                // built-in (CG vendor = 0x610 = Apple VESA), ioreg's vendor
+                // matches but its product differs — use that pair.
+                BOOL exactMatch = (vid == cgVendor && pid == cgProduct);
+                BOOL builtinVendorMatch = CGDisplayIsBuiltin(displayID) &&
+                                           vid == cgVendor;
+                if (exactMatch || builtinVendorMatch) {
+                    *outVendor  = vid;
+                    *outProduct = pid;
+                    CFRelease(props);
+                    IOObjectRelease(svc);
+                    break;
+                }
+            }
+            CFRelease(props);
+        }
+        IOObjectRelease(svc);
+    }
+    IOObjectRelease(iter);
+}
+
 // Build the path /Library/Displays/.../DisplayVendorID-XXX/DisplayProductID-XXX
-// for the given displayID. Vendor and product are the IOKit values exposed via
-// CGDisplayVendorNumber / CGDisplayModelNumber, formatted as lowercase hex.
+// using IDs that actually match what windowserver looks up at runtime.
 - (NSString *)overridePathForDisplay:(CGDirectDisplayID)displayID {
-    uint32_t vendor = CGDisplayVendorNumber(displayID);
-    uint32_t product = CGDisplayModelNumber(displayID);
+    uint32_t vendor = 0, product = 0;
+    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
     return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
             kOverridesRoot, vendor, product];
 }
@@ -82,8 +134,8 @@ static NSError *injectorError(NSInteger code, NSString *message) {
 
 - (NSString *)plistXMLForDisplay:(CGDirectDisplayID)displayID
                      resolutions:(NSArray<NSValue *> *)sizes {
-    uint32_t vendor  = CGDisplayVendorNumber(displayID);
-    uint32_t product = CGDisplayModelNumber(displayID);
+    uint32_t vendor = 0, product = 0;
+    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
 
     NSMutableString *entries = [NSMutableString string];
     for (NSValue *v in sizes) {
@@ -127,35 +179,32 @@ static NSString *escapeForAppleScript(NSString *s) {
 }
 
 - (void)runPrivilegedShell:(NSString *)script
-                completion:(void (^)(BOOL ok, NSError *err))completion {
-    // `do shell script with administrator privileges` runs on current thread
-    // and shows the standard auth prompt. Call from a background queue so we
-    // don't block the main run loop.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSString *escaped = escapeForAppleScript(script);
-        NSString *source = [NSString stringWithFormat:
-            @"do shell script \"%@\" with administrator privileges",
-            escaped];
-        NSAppleScript *as = [[NSAppleScript alloc] initWithSource:source];
-        NSDictionary *errDict = nil;
-        NSAppleEventDescriptor *result = [as executeAndReturnError:&errDict];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (result) {
-                completion(YES, nil);
-            } else {
-                NSString *msg = errDict[NSAppleScriptErrorMessage] ?: @"Shell script failed";
-                NSInteger code = [errDict[NSAppleScriptErrorNumber] integerValue];
-                // -128 is user-cancel — translate to a friendlier message.
-                if (code == -128) msg = @"Authorization cancelled.";
-                completion(NO, injectorError(code, msg));
-            }
-        });
-    });
+                completion:(void (^)(BOOL ok, NSError * _Nullable err))completion {
+    // NSAppleScript is not thread-safe — must execute on the main thread.
+    // The auth prompt is modal anyway, so blocking the main run loop while
+    // the user types their password is the expected behavior.
+    NSAssert([NSThread isMainThread], @"runPrivilegedShell must be called on main");
+
+    NSString *escaped = escapeForAppleScript(script);
+    NSString *source = [NSString stringWithFormat:
+        @"do shell script \"%@\" with administrator privileges",
+        escaped];
+    NSAppleScript *as = [[NSAppleScript alloc] initWithSource:source];
+    NSDictionary *errDict = nil;
+    NSAppleEventDescriptor *result = [as executeAndReturnError:&errDict];
+    if (result) {
+        completion(YES, nil);
+    } else {
+        NSString *msg = errDict[NSAppleScriptErrorMessage] ?: @"Shell script failed";
+        NSInteger code = [errDict[NSAppleScriptErrorNumber] integerValue];
+        if (code == -128) msg = @"Authorization cancelled.";
+        completion(NO, injectorError(code, msg));
+    }
 }
 
 - (void)installForDisplay:(CGDirectDisplayID)displayID
               resolutions:(NSArray<NSValue *> *)sizes
-               completion:(void (^)(BOOL ok, NSError *err))completion {
+               completion:(void (^)(BOOL ok, NSError * _Nullable err))completion {
     if (CGDisplayVendorNumber(displayID) == 0 || CGDisplayModelNumber(displayID) == 0) {
         completion(NO, injectorError(-1,
             @"Display reports no vendor/product ID; cannot target an override plist."));
@@ -180,11 +229,22 @@ static NSString *escapeForAppleScript(NSString *s) {
         @"DisplayResolutionEnabled -bool YES",
         dir, path, xml, dir, path, dir];
 
-    [self runPrivilegedShell:script completion:completion];
+    [self runPrivilegedShell:script completion:^(BOOL ok, NSError *err) {
+        if (!ok) { completion(NO, err); return; }
+        // Defence-in-depth: the script might have returned success but the
+        // file could still be missing (e.g. silent mount issue). Verify.
+        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            completion(NO, injectorError(-1,
+                @"Script ran but the override plist isn't on disk. "
+                @"Check /var/log or the permissions under /Library/Displays."));
+            return;
+        }
+        completion(YES, nil);
+    }];
 }
 
 - (void)uninstallForDisplay:(CGDirectDisplayID)displayID
-                 completion:(void (^)(BOOL ok, NSError *err))completion {
+                 completion:(void (^)(BOOL ok, NSError * _Nullable err))completion {
     NSString *path = [self overridePathForDisplay:displayID];
     NSString *dir  = [path stringByDeletingLastPathComponent];
 
