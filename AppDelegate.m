@@ -5,7 +5,7 @@
 
 #import "AppDelegate.h"
 #import "DisplayManager.h"
-#import "DDC.h"
+#import "Brightness.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 
@@ -346,8 +346,12 @@ static const NSUInteger kModeColType    = 10;
     [self addLabelToMenu:menu title:resStr];
 
     // Fetch the mode list once; both submenu builders read from it.
-    BOOL needAllRes  = [self pref:kShowResolutions];
-    BOOL needForce   = !display.isHiDPI && NSClassFromString(@"CGVirtualDisplay");
+    // Force HiDPI is offered on every panel when CGVirtualDisplay is available —
+    // including panels that already have native HiDPI (e.g. the MacBook built-in),
+    // because the user may want arbitrary HiDPI logical sizes beyond what macOS
+    // exposes natively.
+    BOOL needAllRes = [self pref:kShowResolutions];
+    BOOL needForce  = NSClassFromString(@"CGVirtualDisplay") != nil;
     NSArray<DDDisplayMode *> *modes = (needAllRes || needForce)
         ? [self.displayManager modesForDisplay:display.displayID]
         : @[];
@@ -368,15 +372,18 @@ static const NSUInteger kModeColType    = 10;
         NSArray<DDDisplayMode *> *candidates =
             [self.displayManager forceHiDPICandidatesFromModes:modes];
         if (candidates.count > 0) {
+            NSSet<NSString *> *nativeKeys =
+                [self.displayManager nativeHiDPIPixelKeysFromModes:modes];
             NSMenuItem *forceItem = [[NSMenuItem alloc]
                 initWithTitle:@"    Force HiDPI" action:nil keyEquivalent:@""];
             forceItem.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID
-                                                                 modes:candidates];
+                                                            candidates:candidates
+                                                            nativeKeys:nativeKeys];
             [menu addItem:forceItem];
         }
     }
 
-    if ([[DDC shared] supportsBrightness:display.displayID]) {
+    if ([[Brightness shared] supportsBrightness:display.displayID]) {
         NSMenuItem *brightItem = [[NSMenuItem alloc]
             initWithTitle:@"    Brightness" action:nil keyEquivalent:@""];
         brightItem.submenu = [self buildBrightnessSubmenuForDisplay:display.displayID];
@@ -406,11 +413,13 @@ static const NSUInteger kModeColType    = 10;
 }
 
 - (NSMenu *)buildForceHiDPISubmenuForDisplay:(CGDirectDisplayID)displayID
-                                       modes:(NSArray<DDDisplayMode *> *)modes {
+                                  candidates:(NSArray<DDDisplayMode *> *)candidates
+                                  nativeKeys:(NSSet<NSString *> *)nativeKeys {
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
-    NSFont *mono = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSFont *mono     = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSFont *monoBold = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
 
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"Mirror into a 2\u00D7 virtual display"
@@ -419,23 +428,60 @@ static const NSUInteger kModeColType    = 10;
     [submenu addItem:header];
     [submenu addItem:[NSMenuItem separatorItem]];
 
-    for (DDDisplayMode *mode in modes) {
-        NSMutableString *line = [NSMutableString stringWithFormat:@"%zu \u00D7 %zu",
-                                 mode.pixelWidth, mode.pixelHeight];
+    DDDisplayMode *currentlyForced = [self.displayManager forcedTargetForDisplay:displayID];
+
+    static const NSUInteger kPixelColWidth = 15;
+    static const NSUInteger kHzColWidth    = 8;
+
+    for (DDDisplayMode *mode in candidates) {
+        NSString *pixelStr = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
+                               mode.pixelWidth, mode.pixelHeight]
+                              stringByPaddingToLength:kPixelColWidth
+                                              withString:@" " startingAtIndex:0];
+        NSString *hzStr;
         if (mode.refreshRate > 0) {
-            [line appendFormat:@"  %.0fHz", mode.refreshRate];
+            hzStr = [[NSString stringWithFormat:@"%.0fHz", mode.refreshRate]
+                     stringByPaddingToLength:kHzColWidth
+                                  withString:@" " startingAtIndex:0];
+        } else {
+            hzStr = [@"" stringByPaddingToLength:kHzColWidth
+                                      withString:@" " startingAtIndex:0];
         }
+
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu",
+                         mode.pixelWidth, mode.pixelHeight];
+        // "native" = a native HiDPI mode for this pixel size also exists, so
+        // forcing here is a supersample-style choice rather than the only path
+        // to HiDPI. No marker = Standard-only pixel size, where force is it.
+        NSString *tag = [nativeKeys containsObject:key] ? @"\u25CE native" : @"\u26A1 force";
+
+        NSString *line = [NSString stringWithFormat:@"%@%@%@", pixelStr, hzStr, tag];
+
+        BOOL isCurrent = (currentlyForced &&
+                          currentlyForced.pixelWidth  == mode.pixelWidth &&
+                          currentlyForced.pixelHeight == mode.pixelHeight);
+
         NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:@""
-                   action:@selector(forceHiDPIAtMode:)
+            initWithTitle:line
+                   action:isCurrent ? nil : @selector(forceHiDPIAtMode:)
             keyEquivalent:@""];
         item.target = self;
+        item.enabled = !isCurrent;
         item.representedObject = @{ @"displayID": @(displayID), @"mode": mode };
         item.attributedTitle = [[NSAttributedString alloc]
             initWithString:line
-                attributes:@{NSFontAttributeName: mono}];
+                attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
+        if (isCurrent) item.state = NSControlStateValueOn;
         [submenu addItem:item];
     }
+
+    [submenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *legend = [[NSMenuItem alloc]
+        initWithTitle:@"\u25CE native: HiDPI mode already exists \u2014 "
+                      @"\u26A1 force: Standard-only pixel size"
+               action:nil keyEquivalent:@""];
+    legend.enabled = NO;
+    [submenu addItem:legend];
 
     return submenu;
 }
@@ -583,7 +629,7 @@ static const NSUInteger kModeColType    = 10;
             pixelCol, logicalCol, typeCol, rateStr];
 
         NSMenuItem *item = [[NSMenuItem alloc]
-            initWithTitle:@""
+            initWithTitle:line
                    action:mode.isCurrent ? nil : @selector(switchMode:)
             keyEquivalent:@""];
         item.target = self;
@@ -776,7 +822,7 @@ static const NSUInteger kModeColType    = 10;
     NSString *name = [self.displayManager nameForDisplayID:did];
 
     NSError *error = nil;
-    if ([[DDC shared] setBrightnessPercent:pct forDisplay:did error:&error]) {
+    if ([[Brightness shared] setBrightnessPercent:pct forDisplay:did error:&error]) {
         [self postNotification:@"Brightness"
                           body:[NSString stringWithFormat:@"%@ set to %u%%.", name, pct]];
     } else {
