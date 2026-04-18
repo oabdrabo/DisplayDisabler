@@ -552,27 +552,61 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return chosen;
 }
 
-// Wait until `vdID` appears in CGGetOnlineDisplayList, or timeout.
-// This runs the main runloop between probes (not a busy-wait) — the runloop
-// sleeps on events and wakes when the display-reconfiguration callback fires,
-// so on the common path we return as soon as macOS registers the VD. The 50ms
-// ceiling caps the worst-case latency if no reconfig callback fires at all.
-- (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
-    while ([deadline compare:[NSDate date]] == NSOrderedDescending) {
-        uint32_t n = 0;
-        if (CGGetOnlineDisplayList(0, NULL, &n) == kCGErrorSuccess && n > 0) {
-            CGDirectDisplayID *buf = calloc(n, sizeof *buf);
-            if (buf && CGGetOnlineDisplayList(n, buf, &n) == kCGErrorSuccess) {
-                for (uint32_t i = 0; i < n; i++) {
-                    if (buf[i] == vdID) { free(buf); return YES; }
-                }
-            }
-            if (buf) free(buf);
+// Check once whether `vdID` is in the current online-display list.
+- (BOOL)isDisplayIDOnline:(CGDirectDisplayID)vdID {
+    uint32_t n = 0;
+    if (CGGetOnlineDisplayList(0, NULL, &n) != kCGErrorSuccess || n == 0) return NO;
+    CGDirectDisplayID *buf = calloc(n, sizeof *buf);
+    if (!buf) return NO;
+    BOOL found = NO;
+    if (CGGetOnlineDisplayList(n, buf, &n) == kCGErrorSuccess) {
+        for (uint32_t i = 0; i < n; i++) {
+            if (buf[i] == vdID) { found = YES; break; }
         }
-        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     }
-    return NO;
+    free(buf);
+    return found;
+}
+
+// Signal-only reconfig callback: wakes a dispatch_semaphore so the waiter
+// can re-check the online list without pumping a runloop.
+static void ddWaitSignalCallback(CGDirectDisplayID display __unused,
+                                  CGDisplayChangeSummaryFlags flags,
+                                  void *userInfo) {
+    if (flags & kCGDisplayBeginConfigurationFlag) return;
+    dispatch_semaphore_t sem = (__bridge dispatch_semaphore_t)userInfo;
+    dispatch_semaphore_signal(sem);
+}
+
+// Wait until `vdID` appears in CGGetOnlineDisplayList, or timeout.
+// Previously this pumped the main runloop between probes — which let the
+// coalesced reconfig handler, the VD termination handler (desc.queue = main),
+// and any queued main work fire MID force-apply, re-entering display-config
+// transactions that the caller still had open. Now we block on a semaphore
+// signalled by a one-shot reconfig callback on the CG thread, so main is
+// held in one atomic sequence from force-start to force-end.
+- (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
+    if ([self isDisplayIDOnline:vdID]) return YES;
+
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    void *ctx = (__bridge void *)sem;
+    if (CGDisplayRegisterReconfigurationCallback(ddWaitSignalCallback, ctx) != kCGErrorSuccess) {
+        // Registration failed: sleep once for the whole timeout then check.
+        // Better than polling; worst case still bounded by `timeout`.
+        [NSThread sleepForTimeInterval:timeout];
+        return [self isDisplayIDOnline:vdID];
+    }
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while (![self isDisplayIDOnline:vdID]) {
+        NSTimeInterval remaining = [deadline timeIntervalSinceNow];
+        if (remaining <= 0) break;
+        dispatch_semaphore_wait(sem,
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remaining * NSEC_PER_SEC)));
+    }
+
+    CGDisplayRemoveReconfigurationCallback(ddWaitSignalCallback, ctx);
+    return [self isDisplayIDOnline:vdID];
 }
 
 // Pick color primaries for the virtual display descriptor from the source
@@ -1142,81 +1176,83 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
     CGDirectDisplayID virtualID = vd.displayID;
     self.realignInFlight = YES;
 
-    // 1. Mirror integrity.
-    BOOL mirrorOK = (CGDisplayMirrorsDisplay(physical) == virtualID);
+    // @try/@finally guarantees the guard clears even if an ObjC exception
+    // propagates (e.g. future NSLog format-spec bug) — otherwise a thrown
+    // exception between set and clear would wedge realigns forever.
+    @try {
+        // 1. Mirror integrity.
+        BOOL mirrorOK = (CGDisplayMirrorsDisplay(physical) == virtualID);
 
-    // 2. Virtual-mode integrity: must still be our advertised logical size.
-    DDDisplayMode *target = self.forcedTarget;
-    BOOL modeOK = YES;
-    if (target) {
-        CGDisplayModeRef curV = CGDisplayCopyDisplayMode(virtualID);
-        if (curV) {
-            modeOK = (CGDisplayModeGetWidth(curV)  == target.logicalWidth &&
-                      CGDisplayModeGetHeight(curV) == target.logicalHeight);
-            CGDisplayModeRelease(curV);
-        } else {
-            modeOK = NO;
-        }
-    }
-
-    // 3. Topology integrity: virtual origin matches the pre-force snapshot,
-    // other displays stacked right of the virtual.
-    NSValue *physOriginV = self.preForceTopology[@(physical)];
-    CGPoint physOrigin = physOriginV ? [physOriginV pointValue] : CGPointZero;
-    CGRect vb = CGDisplayBounds(virtualID);
-    BOOL topoOK = (vb.origin.x == physOrigin.x && vb.origin.y == physOrigin.y);
-
-    if (mirrorOK && modeOK && topoOK) {
-        self.realignInFlight = NO;
-        return;
-    }
-
-    NSLog(@"DisplayDisabler: Realigning forced display after reconfig "
-          @"(mirror=%d mode=%d topology=%d).", mirrorOK, modeOK, topoOK);
-
-    if (!mirrorOK) {
-        [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-            return CGConfigureDisplayMirrorOfDisplay(config, physical, virtualID);
-        } error:NULL];
-    }
-
-    if (!modeOK && target) {
-        CGDisplayModeRef vmode = [self copyVirtualDisplayModeForVirtual:virtualID
-                                                           logicalWidth:target.logicalWidth
-                                                          logicalHeight:target.logicalHeight];
-        if (vmode) {
-            [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-                return CGConfigureDisplayWithDisplayMode(config, virtualID, vmode, NULL);
-            } error:NULL];
-            CGDisplayModeRelease(vmode);
-        }
-    }
-
-    if (!topoOK) {
-        CGRect postVB = CGDisplayBounds(virtualID);
-        NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
-        [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-            CGError e = CGConfigureDisplayOrigin(config, virtualID,
-                                                 (int32_t)physOrigin.x,
-                                                 (int32_t)physOrigin.y);
-            if (e != kCGErrorSuccess) return e;
-            int32_t x = (int32_t)(physOrigin.x + postVB.size.width);
-            int32_t y = (int32_t)physOrigin.y;
-            for (NSNumber *didNum in online) {
-                CGDirectDisplayID other = didNum.unsignedIntValue;
-                if (other == physical) continue;
-                if (other == virtualID) continue;
-                if ([self isVirtualDisplayID:other]) continue;
-                if (!CGDisplayIsActive(other)) continue;
-                e = CGConfigureDisplayOrigin(config, other, x, y);
-                if (e != kCGErrorSuccess) return e;
-                x += (int32_t)CGDisplayBounds(other).size.width;
+        // 2. Virtual-mode integrity: must still be our advertised logical size.
+        DDDisplayMode *target = self.forcedTarget;
+        BOOL modeOK = YES;
+        if (target) {
+            CGDisplayModeRef curV = CGDisplayCopyDisplayMode(virtualID);
+            if (curV) {
+                modeOK = (CGDisplayModeGetWidth(curV)  == target.logicalWidth &&
+                          CGDisplayModeGetHeight(curV) == target.logicalHeight);
+                CGDisplayModeRelease(curV);
+            } else {
+                modeOK = NO;
             }
-            return kCGErrorSuccess;
-        } error:NULL];
-    }
+        }
 
-    self.realignInFlight = NO;
+        // 3. Topology integrity: virtual origin matches the pre-force snapshot,
+        // other displays stacked right of the virtual.
+        NSValue *physOriginV = self.preForceTopology[@(physical)];
+        CGPoint physOrigin = physOriginV ? [physOriginV pointValue] : CGPointZero;
+        CGRect vb = CGDisplayBounds(virtualID);
+        BOOL topoOK = (vb.origin.x == physOrigin.x && vb.origin.y == physOrigin.y);
+
+        if (mirrorOK && modeOK && topoOK) return;
+
+        NSLog(@"DisplayDisabler: Realigning forced display after reconfig "
+              @"(mirror=%d mode=%d topology=%d).", mirrorOK, modeOK, topoOK);
+
+        if (!mirrorOK) {
+            [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                return CGConfigureDisplayMirrorOfDisplay(config, physical, virtualID);
+            } error:NULL];
+        }
+
+        if (!modeOK && target) {
+            CGDisplayModeRef vmode = [self copyVirtualDisplayModeForVirtual:virtualID
+                                                               logicalWidth:target.logicalWidth
+                                                              logicalHeight:target.logicalHeight];
+            if (vmode) {
+                [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                    return CGConfigureDisplayWithDisplayMode(config, virtualID, vmode, NULL);
+                } error:NULL];
+                CGDisplayModeRelease(vmode);
+            }
+        }
+
+        if (!topoOK) {
+            CGRect postVB = CGDisplayBounds(virtualID);
+            NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
+            [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                CGError e = CGConfigureDisplayOrigin(config, virtualID,
+                                                     (int32_t)physOrigin.x,
+                                                     (int32_t)physOrigin.y);
+                if (e != kCGErrorSuccess) return e;
+                int32_t x = (int32_t)(physOrigin.x + postVB.size.width);
+                int32_t y = (int32_t)physOrigin.y;
+                for (NSNumber *didNum in online) {
+                    CGDirectDisplayID other = didNum.unsignedIntValue;
+                    if (other == physical) continue;
+                    if (other == virtualID) continue;
+                    if ([self isVirtualDisplayID:other]) continue;
+                    if (!CGDisplayIsActive(other)) continue;
+                    e = CGConfigureDisplayOrigin(config, other, x, y);
+                    if (e != kCGErrorSuccess) return e;
+                    x += (int32_t)CGDisplayBounds(other).size.width;
+                }
+                return kCGErrorSuccess;
+            } error:NULL];
+        }
+    } @finally {
+        self.realignInFlight = NO;
+    }
 }
 
 - (void)pruneStaleVirtualDisplays {
