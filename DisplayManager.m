@@ -1129,6 +1129,35 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
 - (void)restorePreForceTopology {
     NSDictionary<NSNumber *, NSValue *> *topology = self.preForceTopology;
     if (topology.count == 0) return;
+
+    // The shared virtual display isn't destroyed on stop — it's reused for
+    // the next force. After we restore the physicals to their pre-force
+    // origins, the VD is still sitting at whatever origin it held during
+    // the force (target's pre-force origin, placed there by the apply-time
+    // topology alignment). That position now collides with the physical
+    // that's coming back — macOS resolves by auto-deactivating one and the
+    // cursor "gets lost" on panels that end up at the same origin.
+    //
+    // Fix: in the SAME atomic transaction as the physical-origin restore,
+    // park the VD past the rightmost restored physical so it can't collide
+    // with anything user-visible. VD isn't mirrored anywhere now, so its
+    // logical bounds are only used for future force reuse.
+    CGVirtualDisplay *vd = self.sharedVirtualDisplay;
+    CGDirectDisplayID virtualID = vd ? vd.displayID : kCGNullDirectDisplay;
+
+    int32_t rightmost = 0;
+    BOOL haveRightmost = NO;
+    for (NSNumber *didNum in topology) {
+        NSPoint p = [topology[didNum] pointValue];
+        CGRect b = CGDisplayBounds(didNum.unsignedIntValue);
+        int32_t right = (int32_t)(p.x + b.size.width);
+        if (!haveRightmost || right > rightmost) {
+            rightmost = right;
+            haveRightmost = YES;
+        }
+    }
+    int32_t parkX = haveRightmost ? rightmost + 256 : 0;
+
     NSError *err = nil;
     BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         for (NSNumber *didNum in topology) {
@@ -1136,6 +1165,10 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
             if (!CGDisplayIsActive(did)) continue;
             NSPoint p = [topology[didNum] pointValue];
             CGError e = CGConfigureDisplayOrigin(config, did, (int32_t)p.x, (int32_t)p.y);
+            if (e != kCGErrorSuccess) return e;
+        }
+        if (virtualID != kCGNullDirectDisplay) {
+            CGError e = CGConfigureDisplayOrigin(config, virtualID, parkX, 0);
             if (e != kCGErrorSuccess) return e;
         }
         return kCGErrorSuccess;
