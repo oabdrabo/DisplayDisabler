@@ -319,11 +319,6 @@ static const size_t kCommonHiDPICount =
         [menu addItem:modesItem];
     }
 
-    if (!display.isHiDPI && display.hasNativeHiDPIModes) {
-        [self addActionToMenu:menu title:@"Switch to HiDPI"
-                       action:@selector(switchToHiDPI:) displayID:display.displayID];
-    }
-
     if (needForce) {
         NSArray<DDDisplayMode *> *candidates =
             [self.displayManager forceHiDPICandidatesFromModes:modes];
@@ -798,21 +793,6 @@ static const size_t kCommonHiDPICount =
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
-                          body:error.localizedDescription];
-    }
-}
-
-- (void)switchToHiDPI:(NSMenuItem *)sender {
-    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
-    NSString *name = [self.displayManager nameForDisplayID:did];
-
-    NSError *error = nil;
-    if ([self.displayManager switchToHiDPIForDisplay:did error:&error]) {
-        [self postNotification:@"Switched to HiDPI"
-                          body:[NSString stringWithFormat:@"%@ is now in HiDPI mode.", name]];
-    } else {
-        NSLog(@"DisplayDisabler: Failed to switch to HiDPI for 0x%X: %@", did, error);
-        [self postNotification:@"HiDPI Switch Failed"
                           body:error.localizedDescription];
     }
 }

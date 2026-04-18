@@ -20,8 +20,6 @@ extern NSErrorDomain const DDErrorDomain;
 typedef NS_ERROR_ENUM(DDErrorDomain, DDErrorCode) {
     DDErrorCGConfigFailed        = 1,
     DDErrorInvalidMode           = 2,
-    DDErrorReadModesFailed       = 3,
-    DDErrorNoHiDPIModes          = 4,
     DDErrorRequiresMacOS14       = 5,
     DDErrorAlreadyForced         = 6,
     DDErrorNotForced             = 7,
@@ -46,7 +44,6 @@ typedef NS_ERROR_ENUM(DDErrorDomain, DDErrorCode) {
 @property (nonatomic) size_t logicalHeight;
 @property (nonatomic) double refreshRate;
 @property (nonatomic) BOOL isHiDPI;
-@property (nonatomic) BOOL hasNativeHiDPIModes;
 @end
 
 // ── Display mode model ──────────────────────────────────────────────────────
@@ -82,9 +79,6 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)enableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)setMode:(DDDisplayMode *)mode forDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
-
-// HiDPI (native)
-- (BOOL)switchToHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 
 // HiDPI forcing via CGVirtualDisplay (macOS 14+).
 // Pass `mode == nil` to force HiDPI at the panel's current pixel resolution;

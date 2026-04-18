@@ -162,7 +162,6 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 @property (nonatomic) BOOL vdTerminationDeferred;
 - (void)scheduleChangeNotification;
 - (void)handleSharedVirtualDisplayTerminated;
-- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID;
 @end
 
 static void displayReconfigCallback(CGDirectDisplayID display __unused,
@@ -341,7 +340,6 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
                 info.isHiDPI       = (info.pixelWidth > info.logicalWidth);
                 CGDisplayModeRelease(mode);
             }
-            info.hasNativeHiDPIModes = [self displayHasNativeHiDPIModes:did];
         }
 
         [result addObject:info];
@@ -463,92 +461,6 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         return CGConfigureDisplayWithDisplayMode(config, displayID, mode.modeRef, NULL);
     } error:error];
-}
-
-// ── HiDPI (native) ──────────────────────────────────────────────────────────
-
-- (BOOL)displayHasNativeHiDPIModes:(CGDirectDisplayID)displayID {
-    NSDictionary *opts = @{
-        (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES
-    };
-    CFArrayRef allModes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
-    if (!allModes) return NO;
-
-    BOOL hasHiDPI = NO;
-    CFIndex count = CFArrayGetCount(allModes);
-    for (CFIndex i = 0; i < count; i++) {
-        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
-        if (CGDisplayModeGetPixelWidth(mode) > CGDisplayModeGetWidth(mode)) {
-            hasHiDPI = YES;
-            break;
-        }
-    }
-    CFRelease(allModes);
-    return hasHiDPI;
-}
-
-- (BOOL)switchToHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
-    NSDictionary *opts = @{
-        (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES
-    };
-    CFArrayRef allModes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
-    if (!allModes) {
-        if (error) *error = ddMakeError(DDErrorReadModesFailed, @"Could not read display modes.");
-        return NO;
-    }
-
-    // Choose the HiDPI mode whose pixel dimensions match the panel's current
-    // pixel resolution (the "native" HiDPI where logical = pixel / 2). When
-    // no such mode exists, pick the HiDPI mode with the largest logical area —
-    // this is the same choice the Displays pane makes for "Default for display".
-    CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
-    size_t curPW = 0, curPH = 0;
-    if (curMode) {
-        curPW = CGDisplayModeGetPixelWidth(curMode);
-        curPH = CGDisplayModeGetPixelHeight(curMode);
-        CGDisplayModeRelease(curMode);
-    }
-
-    CGDisplayModeRef pixelMatchMode = NULL;
-    CGDisplayModeRef largestAreaMode = NULL;
-    size_t largestArea = 0;
-
-    CFIndex count = CFArrayGetCount(allModes);
-    for (CFIndex i = 0; i < count; i++) {
-        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
-        size_t pw = CGDisplayModeGetPixelWidth(mode);
-        size_t ph = CGDisplayModeGetPixelHeight(mode);
-        size_t lw = CGDisplayModeGetWidth(mode);
-        size_t lh = CGDisplayModeGetHeight(mode);
-        if (pw <= lw) continue;  // not HiDPI
-
-        if (!pixelMatchMode && pw == curPW && ph == curPH) {
-            pixelMatchMode = mode;
-        }
-        size_t area = lw * lh;
-        if (area > largestArea) {
-            largestArea = area;
-            largestAreaMode = mode;
-        }
-    }
-
-    CGDisplayModeRef bestMode = pixelMatchMode ? pixelMatchMode : largestAreaMode;
-    if (!bestMode) {
-        CFRelease(allModes);
-        if (error) *error = ddMakeError(DDErrorNoHiDPIModes, @"No HiDPI modes available.");
-        return NO;
-    }
-
-    // Retain the chosen mode across the CFRelease of the array.
-    CGDisplayModeRetain(bestMode);
-    CFRelease(allModes);
-
-    BOOL ok = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
-        return CGConfigureDisplayWithDisplayMode(config, displayID, bestMode, NULL);
-    } error:error];
-
-    CGDisplayModeRelease(bestMode);
-    return ok;
 }
 
 // ── Force HiDPI via CGVirtualDisplay ────────────────────────────────────────
