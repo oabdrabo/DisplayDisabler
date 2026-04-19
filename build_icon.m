@@ -19,13 +19,11 @@ static void renderAtSize(CGFloat size, NSString *path) {
     // Monochrome display glyph tinted white, ~55% of icon size.
     NSImage *symbol = [NSImage imageWithSystemSymbolName:@"display" accessibilityDescription:nil];
     CGFloat pt = size * 0.55;
-    NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration
-        configurationWithPointSize:pt weight:NSFontWeightRegular];
-    if (@available(macOS 12.0, *)) {
-        config = [config configurationByApplyingConfiguration:
-                  [NSImageSymbolConfiguration configurationWithPaletteColors:
-                   @[[NSColor whiteColor]]]];
-    }
+    NSImageSymbolConfiguration *config = [[NSImageSymbolConfiguration
+        configurationWithPointSize:pt weight:NSFontWeightRegular]
+        configurationByApplyingConfiguration:
+        [NSImageSymbolConfiguration configurationWithPaletteColors:
+         @[[NSColor whiteColor]]]];
     NSImage *glyph = [symbol imageWithSymbolConfiguration:config];
     NSSize gs = glyph.size;
     NSRect gRect = NSMakeRect((size - gs.width) / 2.0,

@@ -35,19 +35,6 @@ static const CGFloat kSwitchLabelGap   = 8;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
-// Common HiDPI logical resolutions the user can force on any display, even
-// when the panel doesn't advertise them as a mode. These go through the
-// virtual-display path — macOS scales the mirror to the panel's real pixels.
-static const struct { size_t w, h; } kCommonHiDPIResolutions[] = {
-    {1920, 1080},   // 16:9  FHD
-    {1920, 1200},   // 16:10
-    {2560, 1440},   // 16:9  QHD
-    {2560, 1600},   // 16:10
-    {3840, 2160},   // 16:9  UHD
-};
-static const size_t kCommonHiDPICount =
-    sizeof kCommonHiDPIResolutions / sizeof *kCommonHiDPIResolutions;
-
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
@@ -293,18 +280,15 @@ static const size_t kCommonHiDPICount =
     }
     [self addLabelToMenu:menu title:resStr];
 
-    // Fetch the mode list once; both submenu builders read from it.
     // Force HiDPI is offered on every panel when CGVirtualDisplay is available —
     // including panels that already have native HiDPI (e.g. the MacBook built-in),
     // because the user may want arbitrary HiDPI logical sizes beyond what macOS
     // exposes natively.
     BOOL needAllRes = [self pref:kShowResolutions];
     BOOL needForce  = NSClassFromString(@"CGVirtualDisplay") != nil;
-    NSArray<DDDisplayMode *> *modes = (needAllRes || needForce)
-        ? [self.displayManager modesForDisplay:display.displayID]
-        : @[];
 
     if (needAllRes) {
+        NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:display.displayID];
         NSMenuItem *modesItem = [[NSMenuItem alloc]
             initWithTitle:@"    All Resolutions" action:nil keyEquivalent:@""];
         modesItem.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
@@ -312,13 +296,13 @@ static const size_t kCommonHiDPICount =
     }
 
     if (needForce) {
-        NSArray<DDDisplayMode *> *candidates =
-            [self.displayManager forceHiDPICandidatesFromModes:modes];
-        if (candidates.count > 0) {
+        NSArray<DDDisplayMode *> *options =
+            [self.displayManager forceHiDPIOptionsForDisplay:display.displayID];
+        if (options.count > 0) {
             NSMenuItem *forceItem = [[NSMenuItem alloc]
                 initWithTitle:@"    Force HiDPI" action:nil keyEquivalent:@""];
             forceItem.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID
-                                                            candidates:candidates];
+                                                               options:options];
             [menu addItem:forceItem];
         }
     }
@@ -367,7 +351,7 @@ static const size_t kCommonHiDPICount =
 }
 
 - (NSMenu *)buildForceHiDPISubmenuForDisplay:(CGDirectDisplayID)displayID
-                                  candidates:(NSArray<DDDisplayMode *> *)candidates {
+                                     options:(NSArray<DDDisplayMode *> *)options {
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
@@ -376,18 +360,19 @@ static const size_t kCommonHiDPICount =
 
     DDDisplayMode *currentlyForced = [self.displayManager forcedTargetForDisplay:displayID];
 
-    // Format a single row as "looksLike<pad>rate". Keep it consistent with
-    // the All Resolutions submenu: logical size ("Looks Like") first, then
-    // refresh rate. Icons distinguish rows instead of glyph-suffixes:
-    // "bolt" for panel-advertised sizes (the actual panel mode we'll switch
-    // to), "plus.square" for custom presets rendered only via virtual.
-    NSMenuItem * (^makeRow)(DDDisplayMode *, BOOL, DDDisplayMode *, NSString *) =
-        ^NSMenuItem *(DDDisplayMode *mode, BOOL isCurrent,
-                       DDDisplayMode *repMode, NSString *symbolName) {
+    // Origin-class is encoded in the option itself: panel-derived rows carry a
+    // real modeRef, synthetic rows carry NULL. Icons reflect that:
+    // "bolt" = a panel mode the force will switch to before mirroring;
+    // "plus.square" = derived-from-physical synthetic, no panel switch.
+    NSMenuItem * (^makeRow)(DDDisplayMode *) = ^NSMenuItem *(DDDisplayMode *mode) {
+        BOOL isCurrent = (currentlyForced &&
+                          currentlyForced.pixelWidth  == mode.pixelWidth &&
+                          currentlyForced.pixelHeight == mode.pixelHeight);
+        NSString *symbolName = (mode.modeRef != NULL) ? @"bolt.fill" : @"plus.square.fill";
         NSString *sizeCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
                               mode.logicalWidth, mode.logicalHeight]
                              stringByPaddingToLength:kModeColLogical
-                                         withString:@" " startingAtIndex:0];
+                                          withString:@" " startingAtIndex:0];
         NSString *rateStr = mode.refreshRate > 0
             ? [NSString stringWithFormat:@"%.0fHz", mode.refreshRate] : @"";
         NSString *line = [NSString stringWithFormat:@"%@%@", sizeCol, rateStr];
@@ -397,7 +382,7 @@ static const size_t kCommonHiDPICount =
             keyEquivalent:@""];
         item.target = self;
         item.enabled = !isCurrent;
-        item.representedObject = @{ @"displayID": @(displayID), @"mode": repMode };
+        item.representedObject = @{ @"displayID": @(displayID), @"mode": mode };
         item.attributedTitle = [[NSAttributedString alloc]
             initWithString:line
                 attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
@@ -407,70 +392,30 @@ static const size_t kCommonHiDPICount =
         return item;
     };
 
-    // Panel-advertised rows first. We only offer a row when a Standard
-    // variant exists for this pixel size (logical == pixel); forcing then
-    // gives a big-workspace supersampled render that All Resolutions can't.
-    // forceHiDPICandidatesFromModes: prefers Standard when both exist, so
-    // this check is just `!mode.isHiDPI`.
-    NSMutableArray<NSMenuItem *> *panelItems = [NSMutableArray array];
-    for (DDDisplayMode *mode in candidates) {
-        if (mode.isHiDPI) continue;
-        BOOL isCurrent = (currentlyForced &&
-                          currentlyForced.pixelWidth  == mode.pixelWidth &&
-                          currentlyForced.pixelHeight == mode.pixelHeight);
-        [panelItems addObject:makeRow(mode, isCurrent, mode, @"bolt.fill")];
+    NSMutableArray<DDDisplayMode *> *panelOpts = [NSMutableArray array];
+    NSMutableArray<DDDisplayMode *> *synthOpts = [NSMutableArray array];
+    for (DDDisplayMode *m in options) {
+        if (m.modeRef != NULL) [panelOpts addObject:m];
+        else                   [synthOpts addObject:m];
     }
 
-    if (panelItems.count > 0) {
+    if (panelOpts.count > 0) {
         NSMenuItem *h = [[NSMenuItem alloc]
             initWithTitle:@"From panel modes" action:nil keyEquivalent:@""];
         h.enabled = NO;
         [submenu addItem:h];
         [submenu addItem:[NSMenuItem separatorItem]];
-        for (NSMenuItem *i in panelItems) [submenu addItem:i];
+        for (DDDisplayMode *m in panelOpts) [submenu addItem:makeRow(m)];
     }
 
-    // Common HiDPI presets: logical sizes not in the panel's mode list. The
-    // virtual-display pipeline renders at the preset, and macOS mirror-scales
-    // onto whatever panel mode lands closest. Synthetic DDDisplayMode with
-    // modeRef=NULL so forceHiDPIForDisplay:atMode:completion: skips the
-    // panel mode switch.
-    NSMutableSet<NSString *> *panelPixelKeys = [NSMutableSet set];
-    for (DDDisplayMode *mode in candidates) {
-        [panelPixelKeys addObject:
-            [NSString stringWithFormat:@"%zu_%zu", mode.pixelWidth, mode.pixelHeight]];
-    }
-
-    NSMutableArray<NSMenuItem *> *customItems = [NSMutableArray array];
-    for (size_t i = 0; i < kCommonHiDPICount; i++) {
-        size_t pw = kCommonHiDPIResolutions[i].w;
-        size_t ph = kCommonHiDPIResolutions[i].h;
-        NSString *key = [NSString stringWithFormat:@"%zu_%zu", pw, ph];
-        if ([panelPixelKeys containsObject:key]) continue;
-
-        DDDisplayMode *synthetic = [[DDDisplayMode alloc] init];
-        synthetic.pixelWidth    = pw;
-        synthetic.pixelHeight   = ph;
-        synthetic.logicalWidth  = pw;
-        synthetic.logicalHeight = ph;
-        synthetic.refreshRate   = 0;
-        synthetic.isHiDPI       = NO;
-        synthetic.modeRef       = NULL;
-
-        BOOL isCurrent = (currentlyForced &&
-                          currentlyForced.pixelWidth  == pw &&
-                          currentlyForced.pixelHeight == ph);
-        [customItems addObject:makeRow(synthetic, isCurrent, synthetic, @"plus.square.fill")];
-    }
-
-    if (customItems.count > 0) {
-        if (panelItems.count > 0) [submenu addItem:[NSMenuItem separatorItem]];
+    if (synthOpts.count > 0) {
+        if (panelOpts.count > 0) [submenu addItem:[NSMenuItem separatorItem]];
         NSMenuItem *h = [[NSMenuItem alloc]
             initWithTitle:@"Custom sizes" action:nil keyEquivalent:@""];
         h.enabled = NO;
         [submenu addItem:h];
         [submenu addItem:[NSMenuItem separatorItem]];
-        for (NSMenuItem *i in customItems) [submenu addItem:i];
+        for (DDDisplayMode *m in synthOpts) [submenu addItem:makeRow(m)];
     }
 
     return submenu;
@@ -809,7 +754,7 @@ static const size_t kCommonHiDPICount =
     CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
 
-    NSArray<NSValue *> *presets = [[HiDPIInjector shared] defaultCustomResolutions];
+    NSArray<NSValue *> *presets = [[HiDPIInjector shared] defaultResolutionsForDisplay:did];
 
     NSMutableString *list = [NSMutableString string];
     for (NSValue *v in presets) {
@@ -817,8 +762,7 @@ static const size_t kCommonHiDPICount =
         [list appendFormat:@"  • %d × %d\n", (int)s.width, (int)s.height];
     }
 
-    if (@available(macOS 14.0, *)) { [NSApp activate]; }
-    else { [NSApp activateIgnoringOtherApps:YES]; }
+    [NSApp activate];
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:
@@ -888,8 +832,7 @@ static const size_t kCommonHiDPICount =
 }
 
 - (void)offerRebootWithMessage:(NSString *)message {
-    if (@available(macOS 14.0, *)) { [NSApp activate]; }
-    else { [NSApp activateIgnoringOtherApps:YES]; }
+    [NSApp activate];
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = message;
@@ -953,11 +896,7 @@ static const size_t kCommonHiDPICount =
 - (BOOL)confirmDestructive:(NSString *)message
                       info:(NSString *)info
                 actionName:(NSString *)actionName {
-    if (@available(macOS 14.0, *)) {
-        [NSApp activate];
-    } else {
-        [NSApp activateIgnoringOtherApps:YES];
-    }
+    [NSApp activate];
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = message;

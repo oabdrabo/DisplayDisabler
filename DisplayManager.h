@@ -78,6 +78,12 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (NSString *)nameForDisplayID:(CGDirectDisplayID)displayID;
 - (nullable DDDisplayInfo *)builtInDisplay;
 - (BOOL)hasExternalDisplay;
+// Native pixel grid of the panel — the dimensions of the kDisplayModeDefaultFlag
+// mode (Apple's "default for display"). Falls back to the current mode's pixel
+// dimensions if no default-flagged mode is present (rare; some virtuals).
+// Used by every aspect-aware code path so there's a single source of truth for
+// "what shape is this panel actually."
+- (CGSize)physicalPixelsForDisplay:(CGDirectDisplayID)displayID;
 
 // Actions
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
@@ -90,12 +96,20 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (void)forceHiDPIForDisplay:(CGDirectDisplayID)displayID
                       atMode:(nullable DDDisplayMode *)mode
                   completion:(DDForceHiDPICompletion)completion;
-// From a mode list (as returned by -modesForDisplay:), return one representative
-// DDDisplayMode per distinct pixel resolution — Standard variant when available,
-// otherwise the HiDPI one. The UI filters out the HiDPI-only rows because
-// forcing them would be redundant with a regular mode-switch in All Resolutions.
+// Per-display Force HiDPI option list. Every entry has a logical size whose
+// aspect matches the panel's physical aspect (so the mirror downscale fills
+// the panel — no letterbox/pillarbox), and is non-redundant with what All
+// Resolutions HiDPI already offers (so we never present a strictly-worse
+// alternative to a panel-native HiDPI row).
+//
+// Two origin classes coexist in the result:
+//   - panel-derived: modeRef != NULL — a Standard panel mode the force will
+//     switch to before mirroring.
+//   - synthetic:     modeRef == NULL — derived from panel physical pixels at
+//     a common HiDPI logical scale. The force will pick the closest aspect-
+//     matching panel mode itself.
 // Sorted desc by area.
-- (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes;
+- (NSArray<DDDisplayMode *> *)forceHiDPIOptionsForDisplay:(CGDirectDisplayID)displayID;
 - (BOOL)stopForcedHiDPIForDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;
 - (BOOL)isHiDPIForcedForDisplay:(CGDirectDisplayID)displayID;
 // The target mode currently forced for this display, or nil if not forced.

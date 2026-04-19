@@ -76,27 +76,19 @@ int main(int argc __unused, const char *argv[] __unused) {
             return 2;
         }
 
-        NSArray<DDDisplayMode *> *modes = [mgr modesForDisplay:target.displayID];
-        NSArray<DDDisplayMode *> *cands = [mgr forceHiDPICandidatesFromModes:modes];
+        NSArray<DDDisplayMode *> *opts = [mgr forceHiDPIOptionsForDisplay:target.displayID];
 
-        DDDisplayMode *forceMode = nil;
-        for (DDDisplayMode *m in cands) {
-            if (!m.isHiDPI &&
-                !(m.pixelWidth == target.pixelWidth && m.pixelHeight == target.pixelHeight)) {
-                forceMode = m; break;
-            }
+        DDDisplayMode *forceMode = nil, *customMode = nil;
+        for (DDDisplayMode *m in opts) {
+            BOOL panelDerived = (m.modeRef != NULL);
+            BOOL sameAsCurrent = (m.pixelWidth  == target.pixelWidth &&
+                                  m.pixelHeight == target.pixelHeight);
+            if (!forceMode  && panelDerived && !sameAsCurrent) forceMode  = m;
+            if (!customMode && !panelDerived)                  customMode = m;
+            if (forceMode && customMode) break;
         }
-        if (!forceMode) { fprintf(stderr, "no force mode; abort\n"); return 3; }
-
-        // Synthetic custom (⊕ custom row) at 2560×1440 — not in panel list.
-        DDDisplayMode *customMode = [[DDDisplayMode alloc] init];
-        customMode.pixelWidth    = 2560;
-        customMode.pixelHeight   = 1440;
-        customMode.logicalWidth  = 2560;
-        customMode.logicalHeight = 1440;
-        customMode.refreshRate   = 0;
-        customMode.isHiDPI       = NO;
-        customMode.modeRef       = NULL;
+        if (!forceMode)  { fprintf(stderr, "no panel-derived force option; abort\n"); return 3; }
+        if (!customMode) { fprintf(stderr, "no synthetic force option; abort\n");     return 4; }
 
         // ── Test 1: Force panel-advertised Standard mode ─────────────────
         fprintf(stderr, "\n=== TEST 1: force+stop panel-standard ===\n");
@@ -114,8 +106,9 @@ int main(int argc __unused, const char *argv[] __unused) {
         pump(0.5);
         if (!do_stop(mgr, target.displayID, "reuse")) return 21;
 
-        // ── Test 3: custom synthetic mode ────────────────────────────────
-        fprintf(stderr, "\n=== TEST 3: force+stop custom synthetic 2560x1440 ===\n");
+        // ── Test 3: custom synthetic mode (whichever the option list yields first) ──
+        fprintf(stderr, "\n=== TEST 3: force+stop custom synthetic %zux%zu ===\n",
+                customMode.pixelWidth, customMode.pixelHeight);
         pump(0.5);
         if (!do_force(mgr, target.displayID, customMode, "synthetic")) return 30;
         log_displays(mgr, "post-force T3");

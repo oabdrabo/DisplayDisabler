@@ -14,9 +14,19 @@
  */
 
 #import "HiDPIInjector.h"
+#import "DisplayManager.h"
 #import <AppKit/AppKit.h>
 #import <IOKit/IOKitLib.h>
 #include <arpa/inet.h>  // htonl
+#include <math.h>
+
+// Logical scales applied to the panel's physical pixel grid to generate the
+// curated install list. Mirrors the Force HiDPI synthetic scales so the two
+// custom-size paths (virtual mirror vs plist override) cover the same logical
+// real estate without a panel-agnostic constant list to drift.
+static const double kInjectorScales[] = {0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5};
+static const size_t kInjectorScaleCount =
+    sizeof(kInjectorScales) / sizeof(*kInjectorScales);
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -39,18 +49,23 @@ static NSError *injectorError(NSInteger code, NSString *message) {
     return instance;
 }
 
-// Kept in sync with AppDelegate.m:kCommonHiDPIResolutions — the two paths
-// (Force HiDPI via virtual display, Crisp HiDPI via plist override) should
-// offer the same set of custom sizes so the user doesn't see one list via
-// one path and a different list via the other.
-- (NSArray<NSValue *> *)defaultCustomResolutions {
-    return @[
-        [NSValue valueWithSize:NSMakeSize(1920, 1080)],   // 16:9  FHD
-        [NSValue valueWithSize:NSMakeSize(1920, 1200)],   // 16:10
-        [NSValue valueWithSize:NSMakeSize(2560, 1440)],   // 16:9  QHD
-        [NSValue valueWithSize:NSMakeSize(2560, 1600)],   // 16:10
-        [NSValue valueWithSize:NSMakeSize(3840, 2160)],   // 16:9  UHD
-    ];
+- (NSArray<NSValue *> *)defaultResolutionsForDisplay:(CGDirectDisplayID)displayID {
+    CGSize physical = [[DisplayManager shared] physicalPixelsForDisplay:displayID];
+    if (physical.width <= 0 || physical.height <= 0) return @[];
+
+    NSMutableArray<NSValue *> *out = [NSMutableArray arrayWithCapacity:kInjectorScaleCount];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (size_t i = 0; i < kInjectorScaleCount; i++) {
+        // Even integers keep the resulting pixel-doubled HiDPI mode integer-clean.
+        size_t lw = (size_t)round(physical.width  * kInjectorScales[i] / 2.0) * 2;
+        size_t lh = (size_t)round(physical.height * kInjectorScales[i] / 2.0) * 2;
+        if (lw == 0 || lh == 0) continue;
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
+        if ([seen containsObject:key]) continue;
+        [seen addObject:key];
+        [out addObject:[NSValue valueWithSize:NSMakeSize(lw, lh)]];
+    }
+    return out;
 }
 
 // Windowserver matches the override plist by the display's "DisplayAttributes

@@ -20,9 +20,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-// Curated logical-resolution presets we offer on any display. Returned as
+// Per-display logical-resolution presets to install. Derived from the panel's
+// physical pixel grid at common HiDPI logical scales so every entry shares the
+// panel's exact aspect — installing aspect-mismatched modes would surface
+// broken/letterboxed entries in System Settings → Displays. Returned as
 // NSValues of NSSize (integer components).
-- (NSArray<NSValue *> *)defaultCustomResolutions;
+- (NSArray<NSValue *> *)defaultResolutionsForDisplay:(CGDirectDisplayID)displayID;
 
 // Whether an override plist is already installed for this display.
 - (BOOL)isInstalledForDisplay:(CGDirectDisplayID)displayID;

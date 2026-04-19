@@ -26,6 +26,25 @@ static const NSTimeInterval kDDCoalesceInterval = 0.5;
 // the race — bumped to 15s for headroom.
 static const NSTimeInterval kDDVirtualOnlineTimeout = 15.0;
 
+// Aspect-ratio tolerance for matching a virtual/synthetic logical size against
+// the panel's physical aspect. Panels round their advertised dimensions to
+// integers so an exact ratio match is rare — 0.5% absorbs that integer rounding
+// while rejecting any mismatch that would produce visible mirror bars. (Worst
+// case at 0.5%: ~6px of pillarbox on a 2560-wide panel — below visual notice.)
+static const double kDDAspectTolerance = 0.005;
+
+// Common HiDPI logical scales applied to the panel's physical pixel grid to
+// generate synthetic Force HiDPI options. Each scale s produces a logical size
+// (W*s, H*s) where W×H is the panel native pixel grid; the virtual then renders
+// at (W*s*2, H*s*2) pixel and mirrors back. By construction every scale yields
+// the panel's exact aspect, so the mirror always fills the panel.
+//   < 1.0  → larger UI (more text, less space)
+//   = 1.0  → "use the whole panel as 1pt = 1 native pixel"
+//   > 1.0  → smaller UI (more space)
+static const double kDDHiDPIScales[] = {0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0};
+static const size_t kDDHiDPIScaleCount = sizeof(kDDHiDPIScales) / sizeof(*kDDHiDPIScales);
+
+
 // ── CGVirtualDisplay private API (macOS 14+, resolved at runtime) ───────────
 
 @interface CGVirtualDisplayMode : NSObject
@@ -437,6 +456,35 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return NO;
 }
 
+- (CGSize)physicalPixelsForDisplay:(CGDirectDisplayID)displayID {
+    NSDictionary *opts = @{
+        (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES
+    };
+    CFArrayRef allModes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
+    CGSize result = CGSizeZero;
+    if (allModes) {
+        CFIndex n = CFArrayGetCount(allModes);
+        for (CFIndex i = 0; i < n; i++) {
+            CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
+            if (CGDisplayModeGetIOFlags(m) & 0x04) {  // kDisplayModeDefaultFlag
+                result.width  = CGDisplayModeGetPixelWidth(m);
+                result.height = CGDisplayModeGetPixelHeight(m);
+                break;
+            }
+        }
+        CFRelease(allModes);
+    }
+    if (result.width == 0 || result.height == 0) {
+        CGDisplayModeRef cur = CGDisplayCopyDisplayMode(displayID);
+        if (cur) {
+            result.width  = CGDisplayModeGetPixelWidth(cur);
+            result.height = CGDisplayModeGetPixelHeight(cur);
+            CGDisplayModeRelease(cur);
+        }
+    }
+    return result;
+}
+
 // ── Actions ─────────────────────────────────────────────────────────────────
 
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
@@ -542,12 +590,12 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
 }
 
 // Pick color primaries for the virtual display descriptor from the source
-// panel's named color space. For the common cases (built-in P3, older sRGB
-// externals) this lets apps render into the correct wide-gamut/sRGB space
-// instead of a blind P3 assumption. For calibrated-ICC or custom profiles
-// CGColorSpaceCopyName returns NULL — we fall back to P3 (the modern-Apple
-// default). CGVirtualDisplay's descriptor only accepts primaries + white
-// point, so true ICC/calibration passthrough is fundamentally impossible.
+// panel's named color space. Display P3 is the default (modern Apple) and is
+// overridden to sRGB/Rec.709 only when the source's CGColorSpaceCopyName
+// returns one of the sRGB-family names. CGVirtualDisplay's descriptor only
+// accepts primaries + white point, so calibrated-ICC profiles cannot be
+// matched 1:1 — those silently use the P3 default, which is correct for
+// every modern Apple panel and benign on others.
 static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
                                       CGPoint *red, CGPoint *green,
                                       CGPoint *blue, CGPoint *white) {
@@ -718,6 +766,15 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
             @"process is an OS-level limit)."));
         return;
     }
+    // The pipeline downstream reads CGDisplayBounds, CGDisplayCopyDisplayMode,
+    // CGConfigureDisplay* on this ID — every one of those is meaningless on an
+    // inactive display. Reject up-front so we don't smuggle a ghost ID through
+    // the apply and have to dig out half-applied state later.
+    if (!CGDisplayIsActive(displayID)) {
+        deliver(NO, ddMakeError(DDErrorNotForced,
+                                @"Cannot force HiDPI on an inactive display."));
+        return;
+    }
     // Snapshot the target's current bounds BEFORE any mirror / mode change,
     // so we can place the virtual at the same origin afterwards and keep
     // the cursor-topology aligned with the other displays.
@@ -756,58 +813,45 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
         CGDisplayModeRelease(curMode);
     }
 
-    // Resolve the panel mode we'll switch to. For a targetMode with a real
-    // modeRef, it's the mode itself. For a synthetic (custom) target with nil
-    // modeRef, find the best-fit panel mode:
-    //   1. Exact 2×target pixels → 1:1 mirror, pixel-perfect (Standard preferred).
-    //   2. Failing that, the panel mode whose dimensions minimize the max-axis
-    //      scale deviation from virtual (2×target) — so the mirror's downscale
-    //      is as close to 1.0 as this panel can offer. This matters on the
-    //      MacBook built-in where Apple advertises a curated set of scaled
-    //      modes but rarely an exact 2×target for arbitrary logical sizes.
+    // Resolve the panel mode the force will switch to. Single picker for both
+    // panel-derived and synthetic targets, hard aspect constraint (mismatched
+    // aspect → mirror bars). Within the surviving candidates the picker
+    // prefers an exact 2× pixel match (true 1:1 mirror downsample), then
+    // falls within a single sweep to the smallest scale deviation, with a
+    // mild bias toward Standard variants.
+    //
+    // Note on notched panels: macOS's mirror compositor unconditionally
+    // auto-switches the destination panel to a runtime mode that matches
+    // the source virtual's logical dimensions and shifts content below the
+    // notch line — overriding whichever mode this picker selects. The
+    // strip beside the camera notch ends up dark regardless. This is
+    // destination-driven OS behavior with no override path; Crisp HiDPI
+    // (panel-native plist injection) is the only architecture that can
+    // render at custom logical sizes without that dead strip.
     NSArray<DDDisplayMode *> *panelModes = [self modesForDisplay:displayID];
-    CGDisplayModeRef switchMode = targetMode ? targetMode.modeRef : NULL;
-    if (targetMode && !switchMode) {
-        size_t wantPW = targetLogicalWidth  * 2;
-        size_t wantPH = targetLogicalHeight * 2;
 
-        // Pass 1: exact 2× match (Standard preferred).
-        for (DDDisplayMode *m in panelModes) {
-            if (m.pixelWidth == wantPW && m.pixelHeight == wantPH && !m.isHiDPI) {
-                switchMode = m.modeRef; break;
-            }
-        }
-        if (!switchMode) {
-            for (DDDisplayMode *m in panelModes) {
-                if (m.pixelWidth == wantPW && m.pixelHeight == wantPH) {
-                    switchMode = m.modeRef; break;
-                }
-            }
-        }
+    size_t wantPW = targetLogicalWidth  * 2;
+    size_t wantPH = targetLogicalHeight * 2;
+    double targetAspect = (double)wantPW / (double)wantPH;
 
-        // Pass 2: no exact match — closest-by-scale-deviation.
-        if (!switchMode) {
-            DDDisplayMode *best = nil;
-            double bestScore = INFINITY;
-            // Prefer Standard variants as mirror sources.
-            for (DDDisplayMode *m in panelModes) {
-                if (m.isHiDPI) continue;
-                double rw = (double)m.pixelWidth  / (double)wantPW;
-                double rh = (double)m.pixelHeight / (double)wantPH;
-                double score = MAX(fabs(1.0 - rw), fabs(1.0 - rh));
-                if (score < bestScore) { bestScore = score; best = m; }
-            }
-            // Fall back to HiDPI variants if no Standard exists.
-            if (!best) {
-                for (DDDisplayMode *m in panelModes) {
-                    double rw = (double)m.pixelWidth  / (double)wantPW;
-                    double rh = (double)m.pixelHeight / (double)wantPH;
-                    double score = MAX(fabs(1.0 - rw), fabs(1.0 - rh));
-                    if (score < bestScore) { bestScore = score; best = m; }
-                }
-            }
-            if (best) switchMode = best.modeRef;
+    CGDisplayModeRef switchMode = NULL;
+    double bestScore = INFINITY;
+    for (DDDisplayMode *m in panelModes) {
+        if (!m.modeRef) continue;
+        double mAspect = (double)m.pixelWidth / (double)m.pixelHeight;
+        if (fabs(mAspect - targetAspect) / targetAspect > kDDAspectTolerance) continue;
+
+        double score;
+        if (m.pixelWidth == wantPW && m.pixelHeight == wantPH) {
+            // Exact 2× pixel match — pure 1:1 mirror, supersample-free path.
+            score = m.isHiDPI ? -0.5 : -1.0;
+        } else {
+            double rw = (double)m.pixelWidth  / (double)wantPW;
+            double rh = (double)m.pixelHeight / (double)wantPH;
+            score = MAX(fabs(1.0 - rw), fabs(1.0 - rh));
+            if (!m.isHiDPI) score *= 0.95;  // mild Standard bias
         }
+        if (score < bestScore) { bestScore = score; switchMode = m.modeRef; }
     }
 
     // Capture the current mode for restore-on-stop — only if we're actually
@@ -819,19 +863,18 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
         }
     }
 
-    // Resolve the refresh rate to advertise on the virtual mode. Prefer the
-    // target mode's rate; fall back to the panel's current rate; then 60.
-    // This lets the virtual match ProMotion 120Hz / high-refresh externals
-    // instead of pinning everything to 60Hz.
-    double targetRate = 0.0;
-    if (targetMode && targetMode.refreshRate > 0) {
-        targetRate = targetMode.refreshRate;
-    } else {
+    // Resolve the refresh rate to advertise on the virtual mode. Synthetic
+    // targets carry rate=0 and inherit the panel's current rate. The panel
+    // is guaranteed active here (the CGDisplayIsActive check above gates
+    // entry), so CGDisplayCopyDisplayMode is non-NULL — no recovery branch
+    // is needed. ProMotion 120Hz and high-refresh externals propagate
+    // directly into the virtual instead of being pinned to 60Hz.
+    double targetRate = (targetMode && targetMode.refreshRate > 0)
+        ? targetMode.refreshRate : 0.0;
+    if (targetRate == 0.0) {
         CGDisplayModeRef cur = CGDisplayCopyDisplayMode(displayID);
-        if (cur) {
-            targetRate = CGDisplayModeGetRefreshRate(cur);
-            CGDisplayModeRelease(cur);
-        }
+        targetRate = CGDisplayModeGetRefreshRate(cur);
+        CGDisplayModeRelease(cur);
     }
 
     NSError *vdErr = nil;
@@ -925,7 +968,8 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
     // picked mode doesn't equal what applySettings advertised, the virtual's
     // logical ends up ≠ target and every pointer event fires at the wrong
     // coordinate (cursor visual at X, event at 2X). Explicit switch closes
-    // that gap. Best-effort: worst case we fall back to the auto-pick.
+    // that gap; the verify-then-rollback step below is what enforces it (no
+    // silent acceptance of a wrong-size auto-pick).
     CGDisplayModeRef virtualMode = [self copyVirtualDisplayModeForVirtual:virtualID
                                                               logicalWidth:targetLogicalWidth
                                                              logicalHeight:targetLogicalHeight];
@@ -939,6 +983,34 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
                   targetLogicalWidth, targetLogicalHeight, pinErr);
         }
         CGDisplayModeRelease(virtualMode);
+    }
+
+    // Verify the virtual's live mode actually matches the advertised target.
+    // If copyVirtualDisplayModeForVirtual returned NULL, or the pin failed, or
+    // macOS auto-picked a different mode afterwards, the cursor canvas won't
+    // match what apps think the screen size is → pointer events fire at
+    // wrong coordinates. That's the "clicks somewhere else" class of bug we
+    // spent a long time rooting out; don't silently ship it. Roll back the
+    // mirror + panel-mode on mismatch and fail the force cleanly.
+    CGDisplayModeRef liveMode = CGDisplayCopyDisplayMode(virtualID);
+    BOOL logicalOK = NO;
+    if (liveMode) {
+        logicalOK = (CGDisplayModeGetWidth(liveMode)  == targetLogicalWidth &&
+                     CGDisplayModeGetHeight(liveMode) == targetLogicalHeight);
+        CGDisplayModeRelease(liveMode);
+    }
+    if (!logicalOK) {
+        [self unmirrorDisplay:displayID];
+        if (preForce && preForce.modeRef) {
+            [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
+                return CGConfigureDisplayWithDisplayMode(config, displayID,
+                                                         preForce.modeRef, NULL);
+            } error:NULL];
+        }
+        deliver(NO, ddMakeError(DDErrorVirtualApplyFailed,
+            @"Could not pin the virtual display to the requested logical size — "
+            @"pointer coordinates would misalign. Force aborted."));
+        return;
     }
 
     // Match the virtual display's gamma table to the physical panel's so the
@@ -1026,29 +1098,89 @@ static void ddPrimariesForColorSpace(CGColorSpaceRef cs,
     return YES;
 }
 
-- (NSArray<DDDisplayMode *> *)forceHiDPICandidatesFromModes:(NSArray<DDDisplayMode *> *)modes {
-    if (modes.count == 0) return @[];
+- (NSArray<DDDisplayMode *> *)forceHiDPIOptionsForDisplay:(CGDirectDisplayID)displayID {
+    CGSize physical = [self physicalPixelsForDisplay:displayID];
+    if (physical.width <= 0 || physical.height <= 0) return @[];
+    double panelAspect = physical.width / physical.height;
 
-    // One representative per distinct pixel size. Prefer the Standard variant
-    // so logicalWidth == pixelWidth — the correct value to pass as the virtual
-    // display's advertised logical size. HiDPI variants are only used as a
-    // fallback (no Standard exists). Panel pixel sizes that have a native
-    // HiDPI variant are filtered out at the UI layer (nativeKeys) because
-    // they belong in All Resolutions, not Force HiDPI. Ties: highest refresh.
-    NSMutableDictionary<NSString *, DDDisplayMode *> *byPixel = [NSMutableDictionary dictionary];
-    for (DDDisplayMode *m in modes) {
-        NSString *key = [NSString stringWithFormat:@"%zu_%zu", m.pixelWidth, m.pixelHeight];
-        DDDisplayMode *cur = byPixel[key];
-        if (!cur) { byPixel[key] = m; continue; }
-        if (cur.isHiDPI != m.isHiDPI) { if (!m.isHiDPI) byPixel[key] = m; continue; }
-        if (m.refreshRate > cur.refreshRate) byPixel[key] = m;
+    NSArray<DDDisplayMode *> *panelModes = [self modesForDisplay:displayID];
+
+    // Logical sizes the panel already exposes as HiDPI in All Resolutions.
+    // Force HiDPI must not duplicate them — the panel-native HiDPI row is
+    // always the better choice (correct fill behavior, no virtual-display
+    // overhead), so offering a Force variant of the same logical size would
+    // be a strictly-worse alternative.
+    NSMutableSet<NSString *> *redundantLogical = [NSMutableSet set];
+    for (DDDisplayMode *m in panelModes) {
+        if (!m.isHiDPI) continue;
+        [redundantLogical addObject:
+            [NSString stringWithFormat:@"%zu_%zu", m.logicalWidth, m.logicalHeight]];
     }
 
-    return [byPixel.allValues sortedArrayUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
-        if (a.pixelWidth  != b.pixelWidth)  return (a.pixelWidth  < b.pixelWidth)  ? NSOrderedDescending : NSOrderedAscending;
-        if (a.pixelHeight != b.pixelHeight) return (a.pixelHeight < b.pixelHeight) ? NSOrderedDescending : NSOrderedAscending;
+    BOOL (^aspectMatches)(double, double) = ^BOOL(double w, double h) {
+        if (h <= 0) return NO;
+        return fabs((w / h) - panelAspect) / panelAspect <= kDDAspectTolerance;
+    };
+
+    NSMutableArray<DDDisplayMode *> *options = [NSMutableArray array];
+    NSMutableSet<NSString *> *seenLogical = [NSMutableSet set];
+
+    // Pass 1: panel Standard modes that match panel aspect AND aren't already
+    // covered by a HiDPI variant in All Resolutions. Highest refresh wins
+    // when several Standard rows share a pixel resolution.
+    NSMutableDictionary<NSString *, DDDisplayMode *> *byPixel = [NSMutableDictionary dictionary];
+    for (DDDisplayMode *m in panelModes) {
+        if (m.isHiDPI) continue;
+        if (!aspectMatches((double)m.pixelWidth, (double)m.pixelHeight)) continue;
+        NSString *logKey = [NSString stringWithFormat:@"%zu_%zu",
+                            m.logicalWidth, m.logicalHeight];
+        if ([redundantLogical containsObject:logKey]) continue;
+        NSString *pxKey = [NSString stringWithFormat:@"%zu_%zu",
+                           m.pixelWidth, m.pixelHeight];
+        DDDisplayMode *cur = byPixel[pxKey];
+        if (!cur || m.refreshRate > cur.refreshRate) byPixel[pxKey] = m;
+    }
+    for (DDDisplayMode *m in byPixel.allValues) {
+        [options addObject:m];
+        [seenLogical addObject:[NSString stringWithFormat:@"%zu_%zu",
+                                m.logicalWidth, m.logicalHeight]];
+    }
+
+    // Pass 2: synthetic sizes derived from panel physical at common HiDPI
+    // logical scales. Aspect-correct by construction (each is panel pixels
+    // multiplied by a scalar). Skip ones that overlap pass-1 results or
+    // panel HiDPI logical sizes. Round to even integers so the virtual's
+    // 2× pixel backing stays integer-clean.
+    for (size_t i = 0; i < kDDHiDPIScaleCount; i++) {
+        size_t lw = (size_t)round(physical.width  * kDDHiDPIScales[i] / 2.0) * 2;
+        size_t lh = (size_t)round(physical.height * kDDHiDPIScales[i] / 2.0) * 2;
+        if (lw == 0 || lh == 0) continue;
+        NSString *logKey = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
+        if ([seenLogical containsObject:logKey]) continue;
+        if ([redundantLogical containsObject:logKey]) continue;
+
+        DDDisplayMode *synth = [[DDDisplayMode alloc] init];
+        synth.pixelWidth    = lw;
+        synth.pixelHeight   = lh;
+        synth.logicalWidth  = lw;
+        synth.logicalHeight = lh;
+        synth.refreshRate   = 0;
+        synth.isHiDPI       = NO;
+        synth.modeRef       = NULL;
+        [options addObject:synth];
+        [seenLogical addObject:logKey];
+    }
+
+    [options sortUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
+        size_t areaA = a.pixelWidth * a.pixelHeight;
+        size_t areaB = b.pixelWidth * b.pixelHeight;
+        if (areaA != areaB) return (areaA < areaB) ? NSOrderedDescending : NSOrderedAscending;
+        if (a.refreshRate != b.refreshRate)
+            return (a.refreshRate < b.refreshRate) ? NSOrderedDescending : NSOrderedAscending;
         return NSOrderedSame;
     }];
+
+    return options;
 }
 
 - (DDDisplayMode *)forcedTargetForDisplay:(CGDirectDisplayID)displayID {

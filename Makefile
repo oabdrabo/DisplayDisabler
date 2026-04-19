@@ -8,7 +8,7 @@ BUNDLE     = $(APP_NAME).app
 
 CC         = clang
 CFLAGS     = -fobjc-arc -Wall -Wextra -O2 -fstack-protector-strong \
-             -mmacosx-version-min=13.0 -MMD -MP
+             -mmacosx-version-min=14.0 -MMD -MP
 FRAMEWORKS = -framework Cocoa -framework CoreGraphics -framework IOKit \
              -framework ServiceManagement -framework UserNotifications \
              -framework CoreDisplay
@@ -33,7 +33,7 @@ $(EXECUTABLE): $(OBJECTS)
 # background. One-shot build-time helper; the .icns is committed to the
 # repo so CI / downstream builders don't need to re-run it.
 AppIcon.icns: build_icon.m
-	@$(CC) -fobjc-arc -O0 -mmacosx-version-min=13.0 -framework Cocoa \
+	@$(CC) -fobjc-arc -O0 -mmacosx-version-min=14.0 -framework Cocoa \
 	    build_icon.m -o /tmp/dd-build-icon
 	@/tmp/dd-build-icon AppIcon.iconset
 	@iconutil -c icns AppIcon.iconset -o AppIcon.icns

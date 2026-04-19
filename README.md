@@ -105,9 +105,8 @@ Makefile           Three-sign clang flow (executable + bundle, ad-hoc)
 
 ## Requirements
 
-- macOS 13 Ventura or later
+- macOS 14 Sonoma or later (Force HiDPI needs the private `CGVirtualDisplay`, first shipped in 14)
 - Apple Silicon recommended (Intel Macs work for everything except DDC brightness on external displays)
-- Force HiDPI requires macOS 14+ (CGVirtualDisplay class)
 - Crisp HiDPI install requires admin credentials and a reboot
 
 ## Files written outside the app bundle
@@ -129,7 +128,7 @@ Uninstall removes the per-display `DisplayVendorID-*` directory only; leaves `Di
 | **Background CPU** | 0% | ~0.5% |
 | **Open source** | Yes (MIT) | No |
 | **Disable/enable** | Yes | Yes |
-| **Force HiDPI (virtual display)** | Yes — any resolution, shared-VD arch, closest-mode fallback | Yes |
+| **Force HiDPI (virtual display)** | Yes — per-panel aspect-locked options, shared-VD arch, hard-aspect-constrained mode pick | Yes |
 | **Crisp HiDPI (plist injection)** | Yes | Yes (a.k.a. "Fully-scalable HiDPI") |
 | **DDC brightness (external)** | Yes (Apple Silicon only) | Yes (Intel + Apple Silicon) |
 | **Brightness on built-in** | Yes (DisplayServices) | Yes |
