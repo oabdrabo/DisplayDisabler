@@ -221,7 +221,7 @@ static const size_t kCommonHiDPICount =
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *quit = [[NSMenuItem alloc]
-        initWithTitle:@"Quit DisplayDisabler"
+        initWithTitle:@"Quit"
                action:@selector(terminate:)
         keyEquivalent:@"q"];
     quit.target = NSApp;
@@ -261,15 +261,20 @@ static const size_t kCommonHiDPICount =
     nameItem.attributedTitle = attrTitle;
     [menu addItem:nameItem];
 
+    // Only surface a state tag when it's non-default — the ● / ○ dot already
+    // communicates active vs disabled. "HiDPI forced" and "disabled" earn
+    // their own text because they're states the user might need to act on.
     NSMutableArray<NSString *> *tags = [NSMutableArray array];
-    if (forced)            [tags addObject:@"HiDPI forced"];
-    else                   [tags addObject:display.isActive ? @"active" : @"disabled"];
-    if (display.isBuiltIn) [tags addObject:@"built-in"];
-    if (display.isMain)    [tags addObject:@"main"];
+    if (forced)                                 [tags addObject:@"HiDPI forced"];
+    else if (!display.isActive)                 [tags addObject:@"disabled"];
+    if (display.isBuiltIn)                      [tags addObject:@"built-in"];
+    if (display.isMain)                         [tags addObject:@"main"];
 
-    [self addLabelToMenu:menu title:
-        [NSString stringWithFormat:@"    %@",
-         [tags componentsJoinedByString:@"  \u2502  "]]];
+    if (tags.count > 0) {
+        [self addLabelToMenu:menu title:
+            [NSString stringWithFormat:@"    %@",
+             [tags componentsJoinedByString:@"  \u2502  "]]];
+    }
 }
 
 - (void)addForcedHiDPIControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
@@ -339,7 +344,7 @@ static const size_t kCommonHiDPICount =
                            : @selector(installCrispHiDPI:))
                 displayID:display.displayID];
 
-    [self addActionToMenu:menu title:@"Disable This Display"
+    [self addActionToMenu:menu title:@"Disable"
                    action:@selector(disableDisplay:) displayID:display.displayID];
 }
 
@@ -472,7 +477,7 @@ static const size_t kCommonHiDPICount =
 }
 
 - (void)addDisabledDisplayControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    [self addActionToMenu:menu title:@"Enable This Display"
+    [self addActionToMenu:menu title:@"Enable"
                    action:@selector(enableDisplay:) displayID:display.displayID];
 }
 
