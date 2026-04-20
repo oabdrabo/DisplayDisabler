@@ -78,12 +78,18 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (NSString *)nameForDisplayID:(CGDirectDisplayID)displayID;
 - (nullable DDDisplayInfo *)builtInDisplay;
 - (BOOL)hasExternalDisplay;
-// Native pixel grid of the panel — the dimensions of the kDisplayModeDefaultFlag
-// mode (Apple's "default for display"). Falls back to the current mode's pixel
-// dimensions if no default-flagged mode is present (rare; some virtuals).
-// Used by every aspect-aware code path so there's a single source of truth for
-// "what shape is this panel actually."
+// Usable rectangle for a MIRROR destination. On a notched panel this is the
+// below-notch rectangle (e.g. 2560×1600 on the M3 Air); on a non-notched panel
+// it's the full pixel grid. Force HiDPI uses this for aspect-lock because the
+// mirror compositor aspect-fits source content into this rectangle.
 - (CGSize)physicalPixelsForDisplay:(CGDirectDisplayID)displayID;
+
+// Full panel native pixel grid INCLUDING the notch-side strip area. Used by
+// Crisp HiDPI (panel-native plist override) since panel-native modes render
+// directly through the OS's notch-aware rendering path — the strip beside the
+// notch is menu-bar space, not dead. On non-notched panels equals
+// physicalPixelsForDisplay:.
+- (CGSize)nativePanelPixelsForDisplay:(CGDirectDisplayID)displayID;
 
 // Actions
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;

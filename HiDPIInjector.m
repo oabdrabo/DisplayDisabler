@@ -1,16 +1,33 @@
 /*
- * HiDPIInjector.m — writes a system-level Display override to expose custom
- * HiDPI modes natively. Reverse-engineered from xzhih/one-key-hidpi (MIT)
- * and BetterDisplay's "fully-scalable HiDPI" flow.
+ * HiDPIInjector.m — writes a /Library-level Display override that adds custom
+ * HiDPI modes to macOS's native mode list. Reverse-engineered against Apple's
+ * own /System/Library/Displays/Contents/Resources/Overrides plists, which
+ * remain the gold standard for correct format.
  *
- * scale-resolutions entry layout (9 bytes, from the one-key-hidpi
- * create_res_1 pattern that works on Apple Silicon macOS 13+):
- *     [0..3] pixel width  × 2 (big-endian uint32) — the HiDPI backing
- *     [4..7] pixel height × 2 (big-endian uint32)
- *     [8]    flag byte = 0x00
- * Apple's windowserver reads the array and materialises both a Standard
- * pixel mode at the given dimensions AND a HiDPI mode at half the logical
- * size, giving crisp 1:1 retina at any resolution the plist contains.
+ * scale-resolutions entry format (per Apple's M3 Air built-in override at
+ * /System/Library/Displays/Contents/Resources/Overrides/DisplayVendorID-610/
+ * DisplayProductID-a052):
+ *
+ *   8-byte entry — FULL-PANEL aspect, the standard HiDPI scaled mode:
+ *     [0..3] pixel width  × 2  (big-endian uint32 — HiDPI backing)
+ *     [4..7] pixel height × 2  (big-endian uint32)
+ *
+ *   12-byte entry — BELOW-NOTCH aspect, the "Scale to fit below built-in
+ *   camera" variant on notched MacBooks:
+ *     [0..3]  pixel width  × 2  (big-endian uint32)
+ *     [4..7]  pixel height × 2  (big-endian uint32)
+ *     [8..11] flag = 1          (big-endian uint32)
+ *
+ * An older "one-key-hidpi" format used 9 bytes with a single-byte 0x00 flag —
+ * that format did NOT match Apple's actual file layout on macOS 26 and likely
+ * produced silently-discarded entries.
+ *
+ * We ALSO preserve Apple's own scale-resolutions entries by reading the
+ * /System plist (which macOS ships per-panel) and merging its entries into
+ * our /Library override. Without this merge, installing our plist would
+ * wipe all of Apple's curated scaled modes (e.g. the 3420×2224, 2940×1912,
+ * 2048×1332 entries for the M3 Air), since /Library shadows /System at the
+ * windowserver lookup layer.
  */
 
 #import "HiDPIInjector.h"
@@ -20,24 +37,52 @@
 #include <arpa/inet.h>  // htonl
 #include <math.h>
 
-// Logical scales applied to the panel's physical pixel grid to generate the
-// curated install list. Mirrors the Force HiDPI synthetic scales so the two
-// custom-size paths (virtual mirror vs plist override) cover the same logical
-// real estate without a panel-agnostic constant list to drift.
-static const double kInjectorScales[] = {0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5};
-static const size_t kInjectorScaleCount =
-    sizeof(kInjectorScales) / sizeof(*kInjectorScales);
+// HiDPI logical scales applied to the panel's FULL native pixel grid. Each
+// produces a mode whose pixel backing is 2× the logical size (standard
+// retina-style HiDPI). 1.0 = "looks like the panel's native pixel count"
+// (supersampled Retina) — this is the mode Apple ships in System Settings'
+// default list for the M3 Air as "Looks like 2560×1664 Retina" only when
+// their own plist includes it. Our full-panel list adds it back if absent.
+static const double kInjectorFullPanelScales[] = { 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5 };
+static const size_t kInjectorFullPanelScaleCount =
+    sizeof(kInjectorFullPanelScales) / sizeof(*kInjectorFullPanelScales);
 
 NS_ASSUME_NONNULL_BEGIN
 
 static NSErrorDomain const kInjectorErrorDomain = @"com.local.DisplayDisabler.HiDPIInjector";
 
-static NSString *const kOverridesRoot =
+static NSString *const kOverridesLibraryRoot =
     @"/Library/Displays/Contents/Resources/Overrides";
+static NSString *const kOverridesSystemRoot =
+    @"/System/Library/Displays/Contents/Resources/Overrides";
 
 static NSError *injectorError(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:kInjectorErrorDomain code:code
                            userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
+// ── Apple-format scale-resolutions entry encoders ───────────────────────────
+
+// 8-byte entry: full-panel aspect HiDPI mode.
+static NSData *entry8(NSUInteger logicalW, NSUInteger logicalH) {
+    uint8_t bytes[8] = {0};
+    uint32_t W = htonl((uint32_t)(logicalW * 2));
+    uint32_t H = htonl((uint32_t)(logicalH * 2));
+    memcpy(bytes + 0, &W, 4);
+    memcpy(bytes + 4, &H, 4);
+    return [NSData dataWithBytes:bytes length:sizeof bytes];
+}
+
+// 12-byte entry: below-notch aspect variant (flag = 1).
+__unused static NSData *entry12BelowNotch(NSUInteger logicalW, NSUInteger logicalH) {
+    uint8_t bytes[12] = {0};
+    uint32_t W = htonl((uint32_t)(logicalW * 2));
+    uint32_t H = htonl((uint32_t)(logicalH * 2));
+    uint32_t F = htonl((uint32_t)1);
+    memcpy(bytes + 0,  &W, 4);
+    memcpy(bytes + 4,  &H, 4);
+    memcpy(bytes + 8,  &F, 4);
+    return [NSData dataWithBytes:bytes length:sizeof bytes];
 }
 
 @implementation HiDPIInjector
@@ -49,16 +94,22 @@ static NSError *injectorError(NSInteger code, NSString *message) {
     return instance;
 }
 
+// Returns full-panel HiDPI logical sizes derived from the panel's NATIVE
+// pixel grid (including the notch-side strip area on notched panels — the
+// strip is menu-bar space in panel-native rendering, not dead). Deliberately
+// uses nativePanelPixelsForDisplay: rather than the mirror-usable
+// physicalPixelsForDisplay: because Crisp HiDPI runs through the OS's own
+// rendering path that handles notch geometry correctly.
 - (NSArray<NSValue *> *)defaultResolutionsForDisplay:(CGDirectDisplayID)displayID {
-    CGSize physical = [[DisplayManager shared] physicalPixelsForDisplay:displayID];
-    if (physical.width <= 0 || physical.height <= 0) return @[];
+    CGSize panel = [[DisplayManager shared] nativePanelPixelsForDisplay:displayID];
+    if (panel.width <= 0 || panel.height <= 0) return @[];
 
-    NSMutableArray<NSValue *> *out = [NSMutableArray arrayWithCapacity:kInjectorScaleCount];
+    NSMutableArray<NSValue *> *out = [NSMutableArray arrayWithCapacity:kInjectorFullPanelScaleCount];
     NSMutableSet<NSString *> *seen = [NSMutableSet set];
-    for (size_t i = 0; i < kInjectorScaleCount; i++) {
-        // Even integers keep the resulting pixel-doubled HiDPI mode integer-clean.
-        size_t lw = (size_t)round(physical.width  * kInjectorScales[i] / 2.0) * 2;
-        size_t lh = (size_t)round(physical.height * kInjectorScales[i] / 2.0) * 2;
+    for (size_t i = 0; i < kInjectorFullPanelScaleCount; i++) {
+        // Even-integer sizes keep the 2× pixel backing integer-clean.
+        size_t lw = (size_t)round(panel.width  * kInjectorFullPanelScales[i] / 2.0) * 2;
+        size_t lh = (size_t)round(panel.height * kInjectorFullPanelScales[i] / 2.0) * 2;
         if (lw == 0 || lh == 0) continue;
         NSString *key = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
         if ([seen containsObject:key]) continue;
@@ -68,65 +119,37 @@ static NSError *injectorError(NSInteger code, NSString *message) {
     return out;
 }
 
-// Windowserver matches the override plist by the display's "DisplayAttributes
-// → ProductAttributes" IDs. On Apple Silicon the built-in panel reports a
-// ProductID that is NOT the value returned by CGDisplayModelNumber (e.g. an
-// ASCII Apple codename like 0x30313441 vs CG's 0xa052). For externals with
-// EDID the two agree. So: prefer AppleCLCD2's values when available, fall
-// back to the CG API for safety (headless/virtual displays).
+// Windowserver looks up override plists by CoreGraphics' vendor/product IDs.
+// Verified empirically against Apple's shipped overrides: e.g. the M3 Air
+// built-in panel has CGDisplayModelNumber == 0xa052 and Apple ships
+// /System/Library/Displays/…/DisplayVendorID-610/DisplayProductID-a052.
+// Earlier versions of this code pulled ProductID from AppleCLCD2's
+// DisplayAttributes.ProductAttributes dict and truncated a 64-bit ASCII
+// panel codename (e.g. "014A\0"/0x3031344101) to SInt32 = 0x30313441,
+// producing a garbage override path that never matched Apple's naming and
+// made loadSystemOverrideForDisplay: silently fail. CG's values are the
+// single source of truth.
 - (void)productAttributesForDisplay:(CGDirectDisplayID)displayID
                              vendor:(uint32_t *)outVendor
                             product:(uint32_t *)outProduct {
-    uint32_t cgVendor  = CGDisplayVendorNumber(displayID);
-    uint32_t cgProduct = CGDisplayModelNumber(displayID);
-    *outVendor  = cgVendor;
-    *outProduct = cgProduct;
-
-    io_iterator_t iter = 0;
-    if (IOServiceGetMatchingServices(kIOMainPortDefault,
-                                      IOServiceMatching("AppleCLCD2"), &iter) != KERN_SUCCESS) {
-        return;
-    }
-    io_service_t svc;
-    while ((svc = IOIteratorNext(iter))) {
-        CFMutableDictionaryRef props = NULL;
-        if (IORegistryEntryCreateCFProperties(svc, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS) {
-            CFDictionaryRef attrs = CFDictionaryGetValue(props, CFSTR("DisplayAttributes"));
-            CFDictionaryRef prod  = attrs ? CFDictionaryGetValue(attrs, CFSTR("ProductAttributes")) : NULL;
-            if (prod) {
-                uint32_t vid = 0, pid = 0;
-                CFNumberRef vn = CFDictionaryGetValue(prod, CFSTR("LegacyManufacturerID"));
-                CFNumberRef pn = CFDictionaryGetValue(prod, CFSTR("ProductID"));
-                if (vn) CFNumberGetValue(vn, kCFNumberSInt32Type, &vid);
-                if (pn) CFNumberGetValue(pn, kCFNumberSInt32Type, &pid);
-                // Match: for externals, ioreg VID/PID equals CG's. For the
-                // built-in (CG vendor = 0x610 = Apple VESA), ioreg's vendor
-                // matches but its product differs — use that pair.
-                BOOL exactMatch = (vid == cgVendor && pid == cgProduct);
-                BOOL builtinVendorMatch = CGDisplayIsBuiltin(displayID) &&
-                                           vid == cgVendor;
-                if (exactMatch || builtinVendorMatch) {
-                    *outVendor  = vid;
-                    *outProduct = pid;
-                    CFRelease(props);
-                    IOObjectRelease(svc);
-                    break;
-                }
-            }
-            CFRelease(props);
-        }
-        IOObjectRelease(svc);
-    }
-    IOObjectRelease(iter);
+    *outVendor  = CGDisplayVendorNumber(displayID);
+    *outProduct = CGDisplayModelNumber(displayID);
 }
 
-// Build the path /Library/Displays/.../DisplayVendorID-XXX/DisplayProductID-XXX
-// using IDs that actually match what windowserver looks up at runtime.
+// Build the /Library override path using the resolved vendor/product IDs.
 - (NSString *)overridePathForDisplay:(CGDirectDisplayID)displayID {
     uint32_t vendor = 0, product = 0;
     [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
     return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
-            kOverridesRoot, vendor, product];
+            kOverridesLibraryRoot, vendor, product];
+}
+
+// Parallel path under /System — Apple's factory-shipped override.
+- (NSString *)systemOverridePathForDisplay:(CGDirectDisplayID)displayID {
+    uint32_t vendor = 0, product = 0;
+    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
+    return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
+            kOverridesSystemRoot, vendor, product];
 }
 
 - (BOOL)isInstalledForDisplay:(CGDirectDisplayID)displayID {
@@ -134,58 +157,86 @@ static NSError *injectorError(NSInteger code, NSString *message) {
             [self overridePathForDisplay:displayID]];
 }
 
-// Encode one scale-resolutions entry: (w*2, h*2) big-endian + 1 zero flag byte.
-- (NSString *)base64EntryForLogicalWidth:(NSUInteger)w height:(NSUInteger)h {
-    uint8_t bytes[9] = {0};
-    uint32_t W = htonl((uint32_t)(w * 2));
-    uint32_t H = htonl((uint32_t)(h * 2));
-    memcpy(bytes + 0, &W, 4);
-    memcpy(bytes + 4, &H, 4);
-    // bytes[8] = 0x00 already
-    NSData *data = [NSData dataWithBytes:bytes length:sizeof bytes];
-    return [data base64EncodedStringWithOptions:0];
+// Load Apple's /System override plist for this panel if one exists. Returns
+// nil for displays Apple doesn't ship an override for (most non-Apple
+// externals). The returned dictionary is the starting point for our merge —
+// we keep its DisplayProductName, IOGFlags, target-default-ppmm, and
+// existing scale-resolutions entries intact, then append our own.
+- (nullable NSDictionary *)loadSystemOverrideForDisplay:(CGDirectDisplayID)displayID {
+    NSString *path = [self systemOverridePathForDisplay:displayID];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return nil;
+    NSError *e = nil;
+    id obj = [NSPropertyListSerialization propertyListWithData:data
+                                                       options:NSPropertyListImmutable
+                                                        format:NULL
+                                                         error:&e];
+    if (![obj isKindOfClass:[NSDictionary class]]) return nil;
+    return obj;
+}
+
+// Generate the full merged plist: Apple's /System fields (if any) + our own
+// scale-resolutions entries appended. Returns a CFData-ready NSDictionary
+// that we later serialize to XML for the shell-script heredoc.
+- (NSDictionary *)mergedPlistDictForDisplay:(CGDirectDisplayID)displayID
+                                resolutions:(NSArray<NSValue *> *)sizes {
+    uint32_t vendor = 0, product = 0;
+    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
+
+    NSDictionary *apple = [self loadSystemOverrideForDisplay:displayID];
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+
+    // Carry forward every key Apple set, so we shadow their plist without
+    // losing fields the windowserver may depend on (IOGFlags, product name,
+    // target-default-ppmm, display-product-string, icons, etc.).
+    if (apple) [out addEntriesFromDictionary:apple];
+
+    // Mandatory identifiers.
+    out[@"DisplayVendorID"]  = @(vendor);
+    out[@"DisplayProductID"] = @(product);
+
+    // Existing scale-resolutions (Apple's curated entries) go first; our
+    // appended entries come after. Dedup by the raw NSData value so a
+    // size Apple already has doesn't get a duplicate entry from us.
+    NSMutableArray *entries = [NSMutableArray array];
+    NSMutableSet<NSData *> *seen = [NSMutableSet set];
+    NSArray *existing = apple[@"scale-resolutions"];
+    if ([existing isKindOfClass:[NSArray class]]) {
+        for (id e in existing) {
+            if ([e isKindOfClass:[NSData class]] && ![seen containsObject:e]) {
+                [entries addObject:e];
+                [seen addObject:e];
+            }
+        }
+    }
+    for (NSValue *v in sizes) {
+        NSSize s = v.sizeValue;
+        NSData *d = entry8((NSUInteger)s.width, (NSUInteger)s.height);
+        if (![seen containsObject:d]) {
+            [entries addObject:d];
+            [seen addObject:d];
+        }
+    }
+    out[@"scale-resolutions"] = entries;
+
+    return out;
 }
 
 - (NSString *)plistXMLForDisplay:(CGDirectDisplayID)displayID
                      resolutions:(NSArray<NSValue *> *)sizes {
-    uint32_t vendor = 0, product = 0;
-    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
-
-    NSMutableString *entries = [NSMutableString string];
-    for (NSValue *v in sizes) {
-        NSSize s = v.sizeValue;
-        NSString *b64 = [self base64EntryForLogicalWidth:(NSUInteger)s.width
-                                                  height:(NSUInteger)s.height];
-        [entries appendFormat:@"\t\t\t<data>%@</data>\n", b64];
-    }
-
-    return [NSString stringWithFormat:
-        @"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        @"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-        @"\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-        @"<plist version=\"1.0\">\n"
-        @"<dict>\n"
-        @"\t<key>DisplayProductID</key>\n"
-        @"\t<integer>%u</integer>\n"
-        @"\t<key>DisplayVendorID</key>\n"
-        @"\t<integer>%u</integer>\n"
-        @"\t<key>scale-resolutions</key>\n"
-        @"\t<array>\n"
-        @"%@"
-        @"\t</array>\n"
-        @"\t<key>target-default-ppmm</key>\n"
-        @"\t<real>10.0699301</real>\n"
-        @"</dict>\n"
-        @"</plist>\n",
-        product, vendor, entries];
+    NSDictionary *merged = [self mergedPlistDictForDisplay:displayID
+                                                resolutions:sizes];
+    NSError *e = nil;
+    NSData *xml = [NSPropertyListSerialization dataWithPropertyList:merged
+                                                              format:NSPropertyListXMLFormat_v1_0
+                                                             options:0
+                                                               error:&e];
+    if (!xml) return @"";
+    return [[NSString alloc] initWithData:xml encoding:NSUTF8StringEncoding];
 }
 
-// Escape a string for safe embedding in a single-quoted AppleScript literal.
-// AppleScript single-quoted strings interpret nothing, but we're going through
-// `do shell script`, which embeds the string literally into a bash heredoc —
-// bash won't interpret anything inside <<'EOF' ... EOF either, so just protect
-// against the terminator appearing in the content (it won't for our plist).
-// We still escape double-quote and backslash for the AppleScript string.
+// Escape a string for safe embedding in a double-quoted AppleScript literal.
 static NSString *escapeForAppleScript(NSString *s) {
     NSString *out = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
     out = [out stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
@@ -194,21 +245,14 @@ static NSString *escapeForAppleScript(NSString *s) {
 
 - (void)runPrivilegedShell:(NSString *)script
                 completion:(void (^)(BOOL ok, NSError * _Nullable err))completion {
-    // NSAppleScript is not thread-safe — must execute on the main thread.
-    // The auth prompt is modal anyway, so blocking the main run loop while
-    // the user types their password is the expected behavior. Enforce the
-    // thread invariant with a live runtime check (NSAssert would compile out
-    // under -DNDEBUG; explicit early-return survives Release builds).
     if (![NSThread isMainThread]) {
         completion(NO, injectorError(-1,
             @"runPrivilegedShell must be called on the main thread."));
         return;
     }
-
     NSString *escaped = escapeForAppleScript(script);
     NSString *source = [NSString stringWithFormat:
-        @"do shell script \"%@\" with administrator privileges",
-        escaped];
+        @"do shell script \"%@\" with administrator privileges", escaped];
     NSAppleScript *as = [[NSAppleScript alloc] initWithSource:source];
     NSDictionary *errDict = nil;
     NSAppleEventDescriptor *result = [as executeAndReturnError:&errDict];
@@ -235,8 +279,8 @@ static NSString *escapeForAppleScript(NSString *s) {
     NSString *dir  = [path stringByDeletingLastPathComponent];
     NSString *xml  = [self plistXMLForDisplay:displayID resolutions:sizes];
 
-    // We send the plist content via a bash heredoc to avoid any quoting gymnastics.
-    // The 'CRISP_EOF' terminator is unlikely to appear in any plist we generate.
+    // Heredoc terminator that cannot collide with any XML content. Single-
+    // quoted ('CRISP_EOF') prevents bash from interpolating anything inside.
     NSString *script = [NSString stringWithFormat:
         @"/bin/mkdir -p %@ && "
         @"/usr/bin/tee %@ > /dev/null <<'CRISP_EOF'\n"
@@ -251,12 +295,10 @@ static NSString *escapeForAppleScript(NSString *s) {
 
     [self runPrivilegedShell:script completion:^(BOOL ok, NSError *err) {
         if (!ok) { completion(NO, err); return; }
-        // Defence-in-depth: the script might have returned success but the
-        // file could still be missing (e.g. silent mount issue). Verify.
         if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
             completion(NO, injectorError(-1,
                 @"Script ran but the override plist isn't on disk. "
-                @"Check /var/log or the permissions under /Library/Displays."));
+                @"Check permissions under /Library/Displays."));
             return;
         }
         completion(YES, nil);
@@ -268,12 +310,10 @@ static NSString *escapeForAppleScript(NSString *s) {
     NSString *path = [self overridePathForDisplay:displayID];
     NSString *dir  = [path stringByDeletingLastPathComponent];
 
-    // Only remove the per-display directory; leave other vendors alone and
-    // leave DisplayResolutionEnabled in place (it's a no-op once overrides
-    // are gone, and other tools might rely on it).
-    NSString *script = [NSString stringWithFormat:
-        @"/bin/rm -rf %@", dir];
-
+    // Only remove the per-display directory; Apple's /System entry remains
+    // in effect. DisplayResolutionEnabled stays flipped — it's a no-op once
+    // our overrides are gone and other tools might rely on it.
+    NSString *script = [NSString stringWithFormat:@"/bin/rm -rf %@", dir];
     [self runPrivilegedShell:script completion:completion];
 }
 

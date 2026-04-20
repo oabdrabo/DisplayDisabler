@@ -481,6 +481,45 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
     return NO;
 }
 
+- (CGSize)nativePanelPixelsForDisplay:(CGDirectDisplayID)displayID {
+    // Returns the panel's FULL native pixel grid including the notch-side
+    // strip area. Enumerate Standard panel modes (logical == pixel); at the
+    // largest width, pick the MAX height (= full panel including strip), not
+    // min (= below-notch). On the M3 Air this returns 2560×1664 (full) vs
+    // physicalPixelsForDisplay:'s 2560×1600 (below-notch). Identical result
+    // on non-notched panels.
+    NSDictionary *opts = @{
+        (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES
+    };
+    CFArrayRef allModes = CGDisplayCopyAllDisplayModes(displayID,
+        (__bridge CFDictionaryRef)opts);
+    CGSize result = CGSizeZero;
+    if (allModes) {
+        size_t maxW = 0, maxHAtMaxW = 0;
+        CFIndex n = CFArrayGetCount(allModes);
+        for (CFIndex i = 0; i < n; i++) {
+            CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
+            size_t pw = CGDisplayModeGetPixelWidth(m);
+            size_t ph = CGDisplayModeGetPixelHeight(m);
+            if (pw != CGDisplayModeGetWidth(m))  continue;
+            if (ph != CGDisplayModeGetHeight(m)) continue;
+            if (pw > maxW) { maxW = pw; maxHAtMaxW = ph; }
+            else if (pw == maxW && ph > maxHAtMaxW) { maxHAtMaxW = ph; }
+        }
+        result.width = maxW; result.height = maxHAtMaxW;
+        CFRelease(allModes);
+    }
+    if (result.width == 0 || result.height == 0) {
+        CGDisplayModeRef cur = CGDisplayCopyDisplayMode(displayID);
+        if (cur) {
+            result.width  = CGDisplayModeGetPixelWidth(cur);
+            result.height = CGDisplayModeGetPixelHeight(cur);
+            CGDisplayModeRelease(cur);
+        }
+    }
+    return result;
+}
+
 - (CGSize)physicalPixelsForDisplay:(CGDirectDisplayID)displayID {
     // Returns the dimensions of the panel's MIRROR-USABLE rectangle, which is
     // what the Force HiDPI options list must aspect-match. On a non-notched
