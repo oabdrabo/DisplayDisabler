@@ -1,14 +1,3 @@
-<!--
-  Drop-in replacement README for github.com/oabdrabo/DisplayDisabler
-
-  To deploy:
-    cd /Users/admin/Documents/workspace/W6.\ DisplayDisabler
-    cp /Users/admin/Documents/workspace/lab/global_talent_visa/github_artifacts/README_DisplayDisabler.md README.md
-    git add README.md
-    git commit -m "Improve README: usage, motivation, build instructions"
-    git push
--->
-
 # DisplayDisabler
 
 Disable a MacBook's built-in display using private Apple CoreGraphics APIs. A 51 KB open-source alternative to BetterDisplay (30+ MB commercial app) for users who only need the disable-internal-display feature on headless / clamshell-mode MacBook setups.
@@ -74,3 +63,7 @@ MIT. See [LICENSE](LICENSE).
 ## Author
 
 [Omar Abdrabo](https://github.com/oabdrabo) · [LinkedIn](https://linkedin.com/in/oabdrabo)
+
+---
+
+Built by [Omar A.](https://github.com/oabdrabo). Other work: **[PYXIS3](https://github.com/pyxis3-ai)** (vendor-neutral AI ops platform), [`vllm-bench`](https://github.com/pyxis3-ai/vllm-bench), [`lens`](https://github.com/oabdrabo/lens), [`noor`](https://github.com/oabdrabo/noor).
