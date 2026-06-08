@@ -12,7 +12,7 @@
  *   Derived from the m1ddc reverse-engineering work (MIT licensed).
  *
  * Internal path (DisplayServices private framework):
- *   DisplayServicesSetBrightness(displayID, 0.0..1.0) → int (0 = success).
+ *   DisplayServicesSetBrightness(displayID, 0.0..1.0) -> int (0 = success).
  *   Resolved at runtime with dlsym so a missing framework degrades gracefully.
  */
 
@@ -45,14 +45,9 @@ typedef int (*DSGetFn)(CGDirectDisplayID, float *);
 typedef int (*DSCanChangeFn)(CGDirectDisplayID);
 
 // Resolves the whole DisplayServices brightness surface in one dispatch_once
-// so the dlopen + dlsym cost is paid at most once per process. The smooth
-// variant is preferred for -set because it reproduces the fade animation
-// Apple's F1/F2 keys drive (instant SetBrightness is visually jarring at
-// large deltas). If SetBrightnessSmooth is missing on some future macOS,
-// we gracefully fall back to SetBrightness.
+// so the dlopen + dlsym cost is paid at most once per process.
 typedef struct {
     DSSetFn         set;
-    DSSetFn         setSmooth;
     DSGetFn         get;
     DSCanChangeFn   canChange;
 } DSBrightnessFns;
@@ -66,7 +61,6 @@ static DSBrightnessFns dsBrightness(void) {
             RTLD_LAZY);
         if (!h) return;
         f.set       = (DSSetFn)dlsym(h, "DisplayServicesSetBrightness");
-        f.setSmooth = (DSSetFn)dlsym(h, "DisplayServicesSetBrightnessSmooth");
         f.get       = (DSGetFn)dlsym(h, "DisplayServicesGetBrightness");
         f.canChange = (DSCanChangeFn)dlsym(h, "DisplayServicesCanChangeBrightness");
     });
@@ -216,14 +210,13 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
                              forDisplay:(CGDirectDisplayID)displayID
                                   error:(NSError **)error {
     DSBrightnessFns f = dsBrightness();
-    DSSetFn setFn = f.setSmooth ?: f.set;
-    if (!setFn) {
+    if (!f.set) {
         if (error) *error = brightnessError(-1,
             @"DisplayServices is unavailable on this macOS version.");
         return NO;
     }
 
-    int rc = setFn(displayID, percent / 100.0f);
+    int rc = f.set(displayID, percent / 100.0f);
     if (rc != 0) {
         if (error) *error = brightnessError(rc,
             [NSString stringWithFormat:@"DisplayServices rejected the brightness (rc=%d).", rc]);
@@ -232,22 +225,22 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
     return YES;
 }
 
+- (BOOL)canChangeViaDisplayServices:(CGDirectDisplayID)displayID {
+    DSBrightnessFns f = dsBrightness();
+    if (!f.set) return NO;
+    if (f.canChange && f.canChange(displayID) != 0) return YES;
+    return CGDisplayIsBuiltin(displayID);
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 - (BOOL)supportsBrightness:(CGDirectDisplayID)displayID {
-    if (CGDisplayIsBuiltin(displayID)) {
-        DSBrightnessFns f = dsBrightness();
-        if (!f.set && !f.setSmooth) return NO;
-        // CanChangeBrightness is the authoritative capability check; some
-        // panels (e.g. external Apple-branded displays) advertise
-        // DisplayServices but refuse writes.
-        return f.canChange ? (f.canChange(displayID) != 0) : YES;
-    }
+    if ([self canChangeViaDisplayServices:displayID]) return YES;
+    if (CGDisplayIsBuiltin(displayID)) return NO;
     return [self serviceFor:displayID] != NULL;
 }
 
 - (int)brightnessPercentForDisplay:(CGDirectDisplayID)displayID {
-    if (!CGDisplayIsBuiltin(displayID)) return -1;
     DSBrightnessFns f = dsBrightness();
     if (!f.get) return -1;
     float v = -1;
@@ -266,9 +259,19 @@ static NSError *brightnessError(NSInteger code, NSString *message) {
                        error:(NSError **)error {
     if (percent > 100) percent = 100;
 
-    if (CGDisplayIsBuiltin(displayID)) {
-        return [self setBrightnessViaDisplayServices:percent forDisplay:displayID error:error];
+    if ([self canChangeViaDisplayServices:displayID]) {
+        NSError *displayServicesError = nil;
+        if ([self setBrightnessViaDisplayServices:percent
+                                       forDisplay:displayID
+                                            error:&displayServicesError]) {
+            return YES;
+        }
+        if (CGDisplayIsBuiltin(displayID)) {
+            if (error) *error = displayServicesError;
+            return NO;
+        }
     }
+
     return [self setBrightnessViaDDC:percent forDisplay:displayID error:error];
 }
 

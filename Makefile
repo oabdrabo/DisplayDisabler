@@ -17,7 +17,7 @@ OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
 
-.PHONY: all clean bundle sign install uninstall icon
+.PHONY: all clean bundle sign install uninstall icon test-smart
 
 all: bundle sign
 
@@ -30,17 +30,28 @@ $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $(OBJECTS) -o $@
 
 # Render AppIcon.icns from the "display" SF Symbol on a dark rounded-rect
-# background. One-shot build-time helper; the .icns is committed to the
-# repo so CI / downstream builders don't need to re-run it.
+# background. The helper also leaves an inspectable AppIcon.iconset while
+# writing the .icns directly, avoiding iconutil's runner-specific validation.
 AppIcon.icns: build_icon.m
 	@$(CC) -fobjc-arc -O0 -mmacosx-version-min=14.0 -framework Cocoa \
 	    build_icon.m -o /tmp/dd-build-icon
-	@/tmp/dd-build-icon AppIcon.iconset
-	@iconutil -c icns AppIcon.iconset -o AppIcon.icns
+	@/tmp/dd-build-icon AppIcon.iconset AppIcon.icns
 	@rm -rf AppIcon.iconset /tmp/dd-build-icon
 	@echo "Built AppIcon.icns"
 
 icon: AppIcon.icns
+
+test-smart:
+	zsh -n scripts/*.sh scripts/lib/*.sh tests/smoke/test_smart_parsers.sh tests/smoke/test_uninstall_smart.sh tests/smoke/test_smart_status_doctor.sh
+	zsh tests/smoke/test_smart_parsers.sh
+	zsh tests/smoke/test_smart_status_doctor.sh
+	zsh tests/smoke/test_uninstall_smart.sh
+	zsh scripts/install_smart.sh --dry-run --app --yes >/dev/null
+	zsh scripts/install_smart.sh --dry-run --cli --no-download --yes --no-watchdog >/dev/null
+	zsh scripts/install_smart.sh --dry-run --full --no-download --yes --no-watchdog >/dev/null
+	zsh scripts/uninstall_smart.sh --dry-run --app --yes >/dev/null
+	zsh scripts/uninstall_smart.sh --dry-run --cli --yes --keep-binary --keep-config --keep-logs >/dev/null
+	zsh scripts/uninstall_smart.sh --dry-run --full --yes --keep-app --keep-binary --keep-config --keep-logs >/dev/null
 
 bundle: $(EXECUTABLE) AppIcon.icns
 	@mkdir -p "$(BUNDLE)/Contents/MacOS"

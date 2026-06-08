@@ -16,6 +16,9 @@ static NSString * const kAutoManage        = @"AutoManageBuiltIn";
 static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
+static NSString * const kSmartRecovery     = @"SmartRecoveryEnabled";
+static NSString * const kTrustedDisplays   = @"TrustedExternalDisplays";
+static NSString * const kLastBuiltInDisplayID = @"LastBuiltInDisplayID";
 
 // Notification identifier used for auto-manage events so consecutive
 // disable/re-enable banners replace each other instead of stacking.
@@ -27,6 +30,8 @@ static const CGFloat kSwitchRowWidth   = 290;
 static const CGFloat kSwitchRowHeight  = 28;
 static const CGFloat kSwitchRowPad     = 18;
 static const CGFloat kSwitchLabelGap   = 8;
+static const CGFloat kSwitchWidth      = 36;
+static const CGFloat kSwitchHeight     = 20;
 
 // ── Modes-submenu layout ────────────────────────────────────────────────────
 // Column widths (in chars) tuned for a monospaced font. Covers 8K + 5-digit
@@ -35,10 +40,67 @@ static const CGFloat kSwitchLabelGap   = 8;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
+// Display topology changes arrive in bursts; this delay lets macOS settle
+// before the event-driven recovery check decides whether to re-enable built-in.
+static const NSTimeInterval kSmartRecoveryDelay = 1.25;
+static const NSTimeInterval kSafetyWatchdogInterval = 2.0;
+
+@interface DDSwitchButton : NSButton
+@end
+
+@implementation DDSwitchButton
+
+- (instancetype)init {
+    self = [super initWithFrame:NSMakeRect(0, 0, kSwitchWidth, kSwitchHeight)];
+    if (self) {
+        self.buttonType = NSButtonTypeToggle;
+        self.bordered = NO;
+        self.title = @"";
+        self.imagePosition = NSNoImage;
+        self.focusRingType = NSFocusRingTypeNone;
+    }
+    return self;
+}
+
+- (void)setState:(NSControlStateValue)state {
+    [super setState:state];
+    self.needsDisplay = YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    (void)event;
+    self.state = (self.state == NSControlStateValueOn)
+        ? NSControlStateValueOff
+        : NSControlStateValueOn;
+    [NSApp sendAction:self.action to:self.target from:self];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    BOOL on = (self.state == NSControlStateValueOn);
+    NSRect bounds = NSInsetRect(self.bounds, 1, 1);
+    NSColor *trackColor = on ? NSColor.controlAccentColor : NSColor.tertiaryLabelColor;
+    [trackColor setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:bounds
+                                     xRadius:NSHeight(bounds) / 2
+                                     yRadius:NSHeight(bounds) / 2] fill];
+
+    CGFloat knobSize = NSHeight(bounds) - 4;
+    CGFloat knobX = on ? NSMaxX(bounds) - knobSize - 2 : NSMinX(bounds) + 2;
+    NSRect knob = NSMakeRect(knobX, NSMinY(bounds) + 2, knobSize, knobSize);
+    [NSColor.controlBackgroundColor setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:knob] fill];
+}
+
+@end
+
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
 @property (nonatomic) BOOL notificationAuthRequested;
+@property (nonatomic) NSInteger smartRecoveryToken;
+@property (nonatomic) dispatch_source_t safetyWatchdog;
+@property (nonatomic) NSTimeInterval suppressAutoDisableUntil;
 @end
 
 @implementation AppDelegate
@@ -54,6 +116,7 @@ static const NSUInteger kModeColType    = 10;
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
 
     [self setupStatusItem];
+    [self rememberBuiltInDisplayIDIfAvailable];
     [self rebuildMenu];
 
     __weak __typeof(self) weakSelf = self;
@@ -72,18 +135,24 @@ static const NSUInteger kModeColType    = 10;
         [strongSelf.displayManager pruneStaleVirtualDisplays];
         [strongSelf.displayManager realignForcedDisplay];
         [[Brightness shared] invalidateServiceCache];
+        [strongSelf rememberBuiltInDisplayIDIfAvailable];
         [strongSelf rebuildMenu];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
+        [strongSelf scheduleSmartRecoveryEvaluation];
+        [strongSelf updateSafetyWatchdog];
     }];
 
     // Reconfiguration callbacks don't fire on registration, so run once
     // now to cover the common "launched while already plugged in" case.
     [self performAutoDisableIfNeeded];
+    [self scheduleSmartRecoveryEvaluation];
+    [self updateSafetyWatchdog];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
+    [self stopSafetyWatchdog];
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
 }
@@ -94,6 +163,9 @@ static const NSUInteger kModeColType    = 10;
         kShowNotifications: @YES,
         kConfirmDisable:    @YES,
         kShowResolutions:   @YES,
+        kSmartRecovery:     @YES,
+        kTrustedDisplays:   @[],
+        kLastBuiltInDisplayID: @0,
     }];
 }
 
@@ -169,6 +241,7 @@ static const NSUInteger kModeColType    = 10;
     menu.autoenablesItems = NO;
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+    displays = [self displaysIncludingKnownBuiltInFallback:displays];
 
     NSUInteger activeCount = 0;
     BOOL anyDisabled = NO;
@@ -191,6 +264,22 @@ static const NSUInteger kModeColType    = 10;
         [self addDisplaySection:display toMenu:menu];
         [menu addItem:[NSMenuItem separatorItem]];
     }
+
+    NSMenuItem *statusItem = [[NSMenuItem alloc]
+        initWithTitle:@"System Status..."
+               action:@selector(showSystemStatus:)
+        keyEquivalent:@""];
+    statusItem.target = self;
+    [menu addItem:statusItem];
+
+    NSMenuItem *doctorItem = [[NSMenuItem alloc]
+        initWithTitle:@"Run Doctor..."
+               action:@selector(runDoctor:)
+        keyEquivalent:@""];
+    doctorItem.target = self;
+    [menu addItem:doctorItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
@@ -255,6 +344,8 @@ static const NSUInteger kModeColType    = 10;
     if (forced)                                 [tags addObject:@"HiDPI forced"];
     else if (!display.isActive)                 [tags addObject:@"disabled"];
     if (display.isBuiltIn)                      [tags addObject:@"built-in"];
+    else if ([self isTrustedExternalDisplay:display]) [tags addObject:@"trusted"];
+    else                                       [tags addObject:@"untrusted"];
     if (display.isMain)                         [tags addObject:@"main"];
 
     if (tags.count > 0) {
@@ -328,6 +419,14 @@ static const NSUInteger kModeColType    = 10;
                            : @selector(installCrispHiDPI:))
                 displayID:display.displayID];
 
+    if (!display.isBuiltIn) {
+        BOOL trusted = [self isTrustedExternalDisplay:display];
+        [self addActionToMenu:menu
+                        title:(trusted ? @"Forget Trusted Display" : @"Trust This Display")
+                       action:(trusted ? @selector(forgetTrustedDisplay:) : @selector(trustDisplay:))
+                    displayID:display.displayID];
+    }
+
     [self addActionToMenu:menu title:@"Disable"
                    action:@selector(disableDisplay:) displayID:display.displayID];
 }
@@ -336,9 +435,8 @@ static const NSUInteger kModeColType    = 10;
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
-    // Current-level header, when the display reports a readable brightness
-    // (built-in via DisplayServicesGetBrightness). DDC reads over IOAVService
-    // are fragile so we don't expose them here.
+    // Current-level header, when DisplayServices reports readable brightness.
+    // DDC reads over IOAVService are fragile so we don't expose them here.
     int cur = [[Brightness shared] brightnessPercentForDisplay:displayID];
     if (cur >= 0) {
         [self addLabelToMenu:submenu
@@ -446,9 +544,19 @@ static const NSUInteger kModeColType    = 10;
     [menu removeAllItems];
 
     [menu addItem:[self switchRowWithTitle:
-        @"Turn off laptop screen when external monitor is connected"
+        @"Turn off laptop screen when trusted external monitor is connected"
             state:[self pref:kAutoManage] identifier:kAutoManage
            action:@selector(switchToggled:)]];
+    [menu addItem:[self switchRowWithTitle:
+        @"Recover laptop screen when trusted monitor disconnects"
+            state:[self pref:kSmartRecovery] identifier:kSmartRecovery
+           action:@selector(switchToggled:)]];
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *trustedItem = [[NSMenuItem alloc]
+        initWithTitle:@"Trusted Displays" action:nil keyEquivalent:@""];
+    trustedItem.submenu = [self buildTrustedDisplaysSubmenu];
+    [menu addItem:trustedItem];
     [menu addItem:[NSMenuItem separatorItem]];
 
     [menu addItem:[self checkItemWithTitle:@"Show notifications"
@@ -480,13 +588,13 @@ static const NSUInteger kModeColType    = 10;
                         identifier:(nullable NSString *)identifier
                             action:(SEL)action {
     NSMenuItem *item = [[NSMenuItem alloc] init];
+    item.enabled = YES;
 
-    NSSwitch *sw = [[NSSwitch alloc] init];
-    sw.controlSize = NSControlSizeMini;
+    DDSwitchButton *sw = [[DDSwitchButton alloc] init];
     sw.translatesAutoresizingMaskIntoConstraints = YES;
-    [sw sizeToFit];
-    CGFloat switchWidth  = sw.frame.size.width;
-    CGFloat switchHeight = sw.frame.size.height;
+    sw.enabled = YES;
+    CGFloat switchWidth  = kSwitchWidth;
+    CGFloat switchHeight = kSwitchHeight;
 
     CGFloat labelWidth = kSwitchRowWidth - (kSwitchRowPad * 2) - switchWidth - kSwitchLabelGap;
     NSFont *font = [NSFont menuFontOfSize:13];
@@ -509,6 +617,7 @@ static const NSUInteger kModeColType    = 10;
     sw.action = action;
     sw.identifier = identifier;
     sw.accessibilityLabel = title;
+    [self applySwitchAppearance:sw];
     [row addSubview:sw];
 
     // `labelWithString:` returns a label with auto-layout enabled, which
@@ -528,6 +637,10 @@ static const NSUInteger kModeColType    = 10;
 
     item.view = row;
     return item;
+}
+
+- (void)applySwitchAppearance:(NSButton *)sw {
+    sw.needsDisplay = YES;
 }
 
 // ── Modes submenu ───────────────────────────────────────────────────────────
@@ -603,6 +716,63 @@ static const NSUInteger kModeColType    = 10;
     return submenu;
 }
 
+// ── Trusted displays submenu ────────────────────────────────────────────────
+
+- (NSMenu *)buildTrustedDisplaysSubmenu {
+    NSMenu *submenu = [[NSMenu alloc] init];
+    submenu.autoenablesItems = NO;
+
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    NSArray<DDDisplayInfo *> *external = [self externalDisplaysActiveOnly:NO];
+    NSUInteger trustedConnected = 0;
+    BOOL hasStableExternal = NO;
+    for (DDDisplayInfo *d in external) {
+        if (![self isSuspiciousExternalName:d.name]) hasStableExternal = YES;
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) {
+            trustedConnected++;
+        }
+    }
+
+    [self addLabelToMenu:submenu title:
+        [NSString stringWithFormat:@"%lu trusted, %lu connected",
+         (unsigned long)records.count, (unsigned long)trustedConnected]];
+    [submenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *trustCurrent = [[NSMenuItem alloc]
+        initWithTitle:@"Trust Current External Displays"
+               action:@selector(trustCurrentExternalDisplays:)
+        keyEquivalent:@""];
+    trustCurrent.target = self;
+    trustCurrent.enabled = hasStableExternal;
+    [submenu addItem:trustCurrent];
+
+    if (records.count > 0) {
+        [submenu addItem:[NSMenuItem separatorItem]];
+        for (NSDictionary *record in records) {
+            NSString *name = record[@"name"] ?: @"External Display";
+            NSString *fingerprint = record[@"fingerprint"] ?: @"";
+            NSMenuItem *forget = [[NSMenuItem alloc]
+                initWithTitle:[NSString stringWithFormat:@"Forget %@", name]
+                       action:@selector(forgetTrustedDisplayRecord:)
+                keyEquivalent:@""];
+            forget.target = self;
+            forget.representedObject = fingerprint;
+            [submenu addItem:forget];
+        }
+
+        [submenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *forgetAll = [[NSMenuItem alloc]
+            initWithTitle:@"Forget All Trusted Displays"
+                   action:@selector(forgetAllTrustedDisplays:)
+            keyEquivalent:@""];
+        forgetAll.target = self;
+        [submenu addItem:forgetAll];
+    }
+
+    return submenu;
+}
+
 // ── Menu helpers ────────────────────────────────────────────────────────────
 
 - (void)addLabelToMenu:(NSMenu *)menu title:(NSString *)title {
@@ -637,6 +807,256 @@ static const NSUInteger kModeColType    = 10;
     [defaults setBool:![defaults boolForKey:key] forKey:key];
 }
 
+// ── Smart safety helpers ────────────────────────────────────────────────────
+
+- (DDDisplayInfo *)displayInfoForID:(CGDirectDisplayID)displayID {
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+        if (d.displayID == displayID) return d;
+    }
+    return nil;
+}
+
+- (NSArray<DDDisplayInfo *> *)displaysIncludingKnownBuiltInFallback:(NSArray<DDDisplayInfo *> *)displays {
+    BOOL hasBuiltIn = NO;
+    for (DDDisplayInfo *d in displays) {
+        if (d.isBuiltIn) {
+            hasBuiltIn = YES;
+            break;
+        }
+    }
+    if (hasBuiltIn) return displays;
+
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    if (builtInID == 0) return displays;
+
+    DDDisplayInfo *fallback = [[DDDisplayInfo alloc] init];
+    fallback.displayID = builtInID;
+    fallback.name = [self.displayManager nameForDisplayID:builtInID];
+    fallback.isBuiltIn = YES;
+    fallback.isActive = NO;
+    fallback.isMain = NO;
+
+    NSMutableArray<DDDisplayInfo *> *withFallback = [displays mutableCopy];
+    [withFallback insertObject:fallback atIndex:0];
+    return withFallback;
+}
+
+- (void)rememberBuiltInDisplayIDIfAvailable {
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    if (!builtIn) return;
+    [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                              forKey:kLastBuiltInDisplayID];
+}
+
+- (CGDirectDisplayID)knownBuiltInDisplayID {
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    if (builtIn) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                                  forKey:kLastBuiltInDisplayID];
+        return builtIn.displayID;
+    }
+
+    NSNumber *cached = [[NSUserDefaults standardUserDefaults] objectForKey:kLastBuiltInDisplayID];
+    return cached.unsignedIntValue;
+}
+
+- (BOOL)isDisplayActive:(CGDirectDisplayID)displayID {
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+        if (d.displayID == displayID) return d.isActive;
+    }
+    return NO;
+}
+
+- (BOOL)isSuspiciousExternalName:(NSString *)name {
+    return (name.length == 0 ||
+            [name isEqualToString:@"Display"] ||
+            [name isEqualToString:@"Unknown Display"]);
+}
+
+- (NSArray<DDDisplayInfo *> *)externalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                activeOnly:(BOOL)activeOnly {
+    NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
+    for (DDDisplayInfo *d in displays) {
+        if (d.isBuiltIn) continue;
+        if (activeOnly && !d.isActive) continue;
+        [result addObject:d];
+    }
+    return result;
+}
+
+- (NSArray<DDDisplayInfo *> *)externalDisplaysActiveOnly:(BOOL)activeOnly {
+    return [self externalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                   activeOnly:activeOnly];
+}
+
+- (NSArray<DDDisplayInfo *> *)stableExternalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                      activeOnly:(BOOL)activeOnly {
+    NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
+    for (DDDisplayInfo *d in [self externalDisplaysFromDisplays:displays activeOnly:activeOnly]) {
+        if ([self isSuspiciousExternalName:d.name]) continue;
+        [result addObject:d];
+    }
+    return result;
+}
+
+- (NSArray<DDDisplayInfo *> *)stableExternalDisplaysActiveOnly:(BOOL)activeOnly {
+    return [self stableExternalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                         activeOnly:activeOnly];
+}
+
+- (NSString *)fingerprintForDisplay:(DDDisplayInfo *)display {
+    uint32_t vendor = CGDisplayVendorNumber(display.displayID);
+    uint32_t model  = CGDisplayModelNumber(display.displayID);
+    uint32_t serial = CGDisplaySerialNumber(display.displayID);
+
+    if (vendor == 0 && model == 0 && serial == 0) {
+        return [NSString stringWithFormat:@"name:%@", display.name ?: @"External Display"];
+    }
+    return [NSString stringWithFormat:@"hw:%u:%u:%u", vendor, model, serial];
+}
+
+- (NSDictionary *)trustedRecordForDisplay:(DDDisplayInfo *)display {
+    return @{
+        @"fingerprint": [self fingerprintForDisplay:display],
+        @"name": display.name ?: @"External Display",
+    };
+}
+
+- (NSArray<NSDictionary *> *)trustedDisplayRecords {
+    NSArray *raw = [[NSUserDefaults standardUserDefaults] arrayForKey:kTrustedDisplays];
+    NSMutableArray<NSDictionary *> *records = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+
+    for (id item in raw) {
+        if (![item isKindOfClass:NSDictionary.class]) continue;
+        NSString *fingerprint = item[@"fingerprint"];
+        NSString *name = item[@"name"];
+        if (![fingerprint isKindOfClass:NSString.class] || fingerprint.length == 0) continue;
+        if ([seen containsObject:fingerprint]) continue;
+        [seen addObject:fingerprint];
+        [records addObject:@{
+            @"fingerprint": fingerprint,
+            @"name": ([name isKindOfClass:NSString.class] && name.length > 0)
+                ? name : @"External Display",
+        }];
+    }
+    return records;
+}
+
+- (NSSet<NSString *> *)trustedDisplayFingerprintsFromRecords:(NSArray<NSDictionary *> *)records {
+    NSMutableSet<NSString *> *fingerprints = [NSMutableSet set];
+    for (NSDictionary *record in records) {
+        NSString *fingerprint = record[@"fingerprint"];
+        if ([fingerprint isKindOfClass:NSString.class] && fingerprint.length > 0) {
+            [fingerprints addObject:fingerprint];
+        }
+    }
+    return fingerprints;
+}
+
+- (void)setTrustedDisplayRecords:(NSArray<NSDictionary *> *)records {
+    [[NSUserDefaults standardUserDefaults] setObject:records forKey:kTrustedDisplays];
+}
+
+- (BOOL)isTrustedExternalDisplay:(DDDisplayInfo *)display
+             trustedFingerprints:(NSSet<NSString *> *)trustedFingerprints {
+    if (!display || display.isBuiltIn) return NO;
+    return [trustedFingerprints containsObject:[self fingerprintForDisplay:display]];
+}
+
+- (BOOL)isTrustedExternalDisplay:(DDDisplayInfo *)display {
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    return [self isTrustedExternalDisplay:display
+                      trustedFingerprints:[self trustedDisplayFingerprintsFromRecords:records]];
+}
+
+- (NSArray<DDDisplayInfo *> *)trustedExternalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                       activeOnly:(BOOL)activeOnly
+                                              trustedFingerprints:(NSSet<NSString *> *)trustedFingerprints {
+    NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
+    for (DDDisplayInfo *d in [self externalDisplaysFromDisplays:displays activeOnly:activeOnly]) {
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) {
+            [result addObject:d];
+        }
+    }
+    return result;
+}
+
+- (NSArray<DDDisplayInfo *> *)trustedExternalDisplaysActiveOnly:(BOOL)activeOnly {
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    return [self trustedExternalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                         activeOnly:activeOnly
+                                trustedFingerprints:[self trustedDisplayFingerprintsFromRecords:records]];
+}
+
+- (BOOL)hasTrustedActiveExternalDisplay {
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    if (records.count == 0) return NO;
+
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+        if (d.isBuiltIn || !d.isActive) continue;
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) return YES;
+    }
+    return NO;
+}
+
+- (NSUInteger)trustExternalDisplays:(NSArray<DDDisplayInfo *> *)displays {
+    NSMutableArray<NSDictionary *> *records =
+        [[self trustedDisplayRecords] mutableCopy] ?: [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (NSDictionary *record in records) {
+        NSString *fingerprint = record[@"fingerprint"];
+        if (fingerprint) [seen addObject:fingerprint];
+    }
+
+    NSUInteger added = 0;
+    for (DDDisplayInfo *display in displays) {
+        if (display.isBuiltIn || [self isSuspiciousExternalName:display.name]) continue;
+        NSDictionary *record = [self trustedRecordForDisplay:display];
+        NSString *fingerprint = record[@"fingerprint"];
+        if ([seen containsObject:fingerprint]) continue;
+        [seen addObject:fingerprint];
+        [records addObject:record];
+        added++;
+    }
+
+    if (added > 0) [self setTrustedDisplayRecords:records];
+    return added;
+}
+
+- (BOOL)prepareToDisableBuiltInDisplay:(DDDisplayInfo *)builtIn {
+    if ([self hasTrustedActiveExternalDisplay]) return YES;
+
+    NSArray<DDDisplayInfo *> *stableExternal = [self stableExternalDisplaysActiveOnly:YES];
+    if (stableExternal.count == 0) {
+        [self postNotification:@"Cannot Disable"
+                          body:@"No stable active external display is available."];
+        return NO;
+    }
+
+    [NSApp activate];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:
+        @"Trust external display before disabling \"%@\"?", builtIn.name];
+    alert.informativeText =
+        @"The app only keeps the built-in display off while a trusted external "
+        @"display remains active. This avoids being left without a usable screen.";
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"Trust & Disable"];
+    [alert addButtonWithTitle:@"Cancel"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return NO;
+
+    NSUInteger added = [self trustExternalDisplays:stableExternal];
+    if (added == 0 && ![self hasTrustedActiveExternalDisplay]) {
+        [self postNotification:@"Cannot Disable"
+                          body:@"No trusted external display could be registered."];
+        return NO;
+    }
+    [self rebuildMenu];
+    return YES;
+}
+
 // ── Display actions ─────────────────────────────────────────────────────────
 
 - (void)switchMode:(NSMenuItem *)sender {
@@ -663,6 +1083,11 @@ static const NSUInteger kModeColType    = 10;
 - (void)disableDisplay:(NSMenuItem *)sender {
     CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
+    DDDisplayInfo *target = [self displayInfoForID:did];
+
+    if (target.isBuiltIn && ![self prepareToDisableBuiltInDisplay:target]) {
+        return;
+    }
 
     // Refuse to disable the last active display — prevents an unrecoverable black screen.
     NSUInteger activeCount = 0;
@@ -684,8 +1109,14 @@ static const NSUInteger kModeColType    = 10;
 
     NSError *error = nil;
     if ([self.displayManager disableDisplay:did error:&error]) {
+        if (target.isBuiltIn) {
+            [[NSUserDefaults standardUserDefaults] setObject:@(did)
+                                                      forKey:kLastBuiltInDisplayID];
+        }
         [self postNotification:@"Display Disabled"
                           body:[NSString stringWithFormat:@"%@ has been disabled.", name]];
+        [self scheduleSmartRecoveryEvaluation];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Failed to disable 0x%X: %@", did, error);
         [self postNotification:@"Disable Failed"
@@ -696,10 +1127,19 @@ static const NSUInteger kModeColType    = 10;
 - (void)enableDisplay:(NSMenuItem *)sender {
     CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
+    BOOL enablingBuiltIn = (did == [self knownBuiltInDisplayID]);
+
+    if (enablingBuiltIn) {
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kAutoManage];
+        self.suppressAutoDisableUntil = CFAbsoluteTimeGetCurrent() + 8.0;
+    }
+
     NSError *error = nil;
     if ([self.displayManager enableDisplay:did error:&error]) {
         [self postNotification:@"Display Enabled"
                           body:[NSString stringWithFormat:@"%@ has been enabled.", name]];
+        [self rebuildMenu];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
@@ -757,11 +1197,258 @@ static const NSUInteger kModeColType    = 10;
     if ([[Brightness shared] setBrightnessPercent:pct forDisplay:did error:&error]) {
         [self postNotification:@"Brightness"
                           body:[NSString stringWithFormat:@"%@ set to %u%%.", name, pct]];
+        [self rebuildMenu];
     } else {
         NSLog(@"DisplayDisabler: Failed to set brightness on 0x%X: %@", did, error);
         [self postNotification:@"Brightness Failed"
                           body:error.localizedDescription];
     }
+}
+
+// ── Smart safety actions ────────────────────────────────────────────────────
+
+- (void)trustDisplay:(NSMenuItem *)sender {
+    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
+    DDDisplayInfo *display = [self displayInfoForID:did];
+    if (!display || display.isBuiltIn) return;
+
+    NSUInteger added = [self trustExternalDisplays:@[display]];
+    if (added > 0) {
+        [self postNotification:@"Display Trusted"
+                          body:[NSString stringWithFormat:@"%@ will keep built-in recovery armed.",
+                                display.name]];
+    }
+    [self rebuildMenu];
+}
+
+- (void)trustCurrentExternalDisplays:(id)sender {
+    (void)sender;
+    NSArray<DDDisplayInfo *> *stableExternal = [self stableExternalDisplaysActiveOnly:NO];
+    NSUInteger added = [self trustExternalDisplays:stableExternal];
+
+    if (added > 0) {
+        [self postNotification:@"Trusted Displays Updated"
+                          body:[NSString stringWithFormat:@"%lu display(s) added.",
+                                (unsigned long)added]];
+    } else {
+        [self postNotification:@"No Displays Added"
+                          body:@"No new stable external display was detected."];
+    }
+    [self rebuildMenu];
+}
+
+- (void)forgetTrustedDisplay:(NSMenuItem *)sender {
+    CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
+    DDDisplayInfo *display = [self displayInfoForID:did];
+    if (!display) return;
+    [self removeTrustedDisplayFingerprint:[self fingerprintForDisplay:display]];
+    [self postNotification:@"Trusted Display Removed"
+                      body:[NSString stringWithFormat:@"%@ is no longer trusted.",
+                            display.name]];
+    [self rebuildMenu];
+    [self scheduleSmartRecoveryEvaluation];
+}
+
+- (void)forgetTrustedDisplayRecord:(NSMenuItem *)sender {
+    NSString *fingerprint = sender.representedObject;
+    if (![fingerprint isKindOfClass:NSString.class]) return;
+    [self removeTrustedDisplayFingerprint:fingerprint];
+    [self postNotification:@"Trusted Display Removed"
+                      body:@"The display was removed from the trusted list."];
+    [self rebuildMenu];
+    [self scheduleSmartRecoveryEvaluation];
+}
+
+- (void)forgetAllTrustedDisplays:(id)sender {
+    (void)sender;
+    if (![self confirmDestructive:@"Forget all trusted displays?"
+                             info:@"The app will re-enable the built-in display whenever no trusted external monitor is active."
+                       actionName:@"Forget All"]) {
+        return;
+    }
+    [self setTrustedDisplayRecords:@[]];
+    [self postNotification:@"Trusted Displays Cleared"
+                      body:@"No external displays are trusted now."];
+    [self rebuildMenu];
+    [self scheduleSmartRecoveryEvaluation];
+}
+
+- (void)removeTrustedDisplayFingerprint:(NSString *)fingerprint {
+    if (fingerprint.length == 0) return;
+    NSMutableArray<NSDictionary *> *records = [NSMutableArray array];
+    for (NSDictionary *record in [self trustedDisplayRecords]) {
+        if ([record[@"fingerprint"] isEqualToString:fingerprint]) continue;
+        [records addObject:record];
+    }
+    [self setTrustedDisplayRecords:records];
+}
+
+- (void)showSystemStatus:(id)sender {
+    (void)sender;
+    [NSApp activate];
+
+    NSString *status = [self systemStatusText];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"DisplayDisabler Status";
+    alert.informativeText = status;
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Copy"];
+    NSModalResponse response = [alert runModal];
+    if (response == NSAlertSecondButtonReturn) {
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        [pb setString:status forType:NSPasteboardTypeString];
+    }
+}
+
+- (void)runDoctor:(id)sender {
+    (void)sender;
+    [NSApp activate];
+
+    NSString *doctor = [self doctorText];
+    BOOL hasFailure = [doctor containsString:@"FAIL:"];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = hasFailure
+        ? @"DisplayDisabler Doctor Found Issues"
+        : @"DisplayDisabler Doctor";
+    alert.informativeText = doctor;
+    alert.alertStyle = hasFailure ? NSAlertStyleWarning : NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+- (NSString *)launchAtLoginStatusText {
+    switch (SMAppService.mainAppService.status) {
+        case SMAppServiceStatusEnabled:
+            return @"enabled";
+        case SMAppServiceStatusRequiresApproval:
+            return @"requires approval";
+        case SMAppServiceStatusNotRegistered:
+            return @"not registered";
+        case SMAppServiceStatusNotFound:
+            return @"not found";
+        default:
+            return @"unknown";
+    }
+}
+
+- (NSString *)systemStatusText {
+    NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    NSArray<DDDisplayInfo *> *external = [self externalDisplaysFromDisplays:displays activeOnly:NO];
+    NSArray<DDDisplayInfo *> *trustedActive =
+        [self trustedExternalDisplaysFromDisplays:displays
+                                       activeOnly:YES
+                              trustedFingerprints:trustedFingerprints];
+
+    NSUInteger activeCount = 0;
+    for (DDDisplayInfo *d in displays) {
+        if (d.isActive) activeCount++;
+    }
+
+    BOOL cliExecutable =
+        [[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/local/bin/display_disable"];
+
+    NSMutableString *status = [NSMutableString string];
+    [status appendFormat:@"Displays: %lu connected, %lu active\n",
+     (unsigned long)displays.count, (unsigned long)activeCount];
+    [status appendFormat:@"Built-in: %@%@\n",
+     builtIn ? builtIn.name : @"not detected",
+     builtIn ? (builtIn.isActive ? @" (active)" : @" (inactive)") : @""];
+    [status appendFormat:@"External: %lu connected, %lu trusted active\n",
+     (unsigned long)external.count, (unsigned long)trustedActive.count];
+    [status appendFormat:@"Smart recovery: %@\n", [self pref:kSmartRecovery] ? @"on" : @"off"];
+    [status appendFormat:@"Auto-manage: %@\n", [self pref:kAutoManage] ? @"on" : @"off"];
+    [status appendFormat:@"Launch at Login: %@\n", [self launchAtLoginStatusText]];
+    [status appendFormat:@"CLI fallback: %@\n", cliExecutable ? @"available" : @"missing"];
+
+    if (records.count > 0) {
+        [status appendString:@"\nTrusted displays:\n"];
+        for (NSDictionary *record in records) {
+            [status appendFormat:@"- %@\n", record[@"name"] ?: @"External Display"];
+        }
+    } else {
+        [status appendString:@"\nTrusted displays: none\n"];
+    }
+
+    return status;
+}
+
+- (NSString *)doctorText {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    NSArray<DDDisplayInfo *> *stableExternal =
+        [self stableExternalDisplaysFromDisplays:displays activeOnly:NO];
+    NSArray<DDDisplayInfo *> *trustedActive =
+        [self trustedExternalDisplaysFromDisplays:displays
+                                       activeOnly:YES
+                              trustedFingerprints:trustedFingerprints];
+    BOOL hasFailure = NO;
+    BOOL hasWarning = NO;
+
+    if (displays.count == 0) {
+        [lines addObject:@"FAIL: No online displays were reported by CoreGraphics."];
+        hasFailure = YES;
+    } else {
+        [lines addObject:@"OK: CoreGraphics reports online displays."];
+    }
+
+    if (!builtIn) {
+        [lines addObject:@"WARN: Built-in display was not detected."];
+        hasWarning = YES;
+    } else if (!builtIn.isActive && trustedActive.count == 0) {
+        [lines addObject:@"WARN: Built-in display is inactive and no trusted external display is active."];
+        hasWarning = YES;
+    } else {
+        [lines addObject:@"OK: Built-in display state is recoverable."];
+    }
+
+    if (records.count == 0) {
+        [lines addObject:@"WARN: No trusted external displays are configured."];
+        hasWarning = YES;
+    } else {
+        [lines addObject:@"OK: Trusted external displays are configured."];
+    }
+
+    if (stableExternal.count == 0) {
+        [lines addObject:@"INFO: No stable external display is currently connected."];
+    } else {
+        [lines addObject:@"OK: Stable external display names are available."];
+    }
+
+    if ([self pref:kAutoManage] && records.count == 0) {
+        [lines addObject:@"WARN: Auto-manage is on, but no trusted display can trigger it."];
+        hasWarning = YES;
+    }
+
+    if ([self pref:kSmartRecovery]) {
+        [lines addObject:@"OK: Event-driven smart recovery is enabled."];
+    } else {
+        [lines addObject:@"WARN: Event-driven smart recovery is disabled."];
+        hasWarning = YES;
+    }
+
+    BOOL cliExecutable =
+        [[NSFileManager defaultManager] isExecutableFileAtPath:@"/usr/local/bin/display_disable"];
+    [lines addObject:(cliExecutable
+        ? @"OK: CLI fallback is available."
+        : @"INFO: CLI fallback is not installed at /usr/local/bin/display_disable.")];
+
+    if (!hasFailure && !hasWarning) {
+        [lines insertObject:@"Doctor: OK" atIndex:0];
+    } else if (!hasFailure) {
+        [lines insertObject:@"Doctor: warnings found" atIndex:0];
+    } else {
+        [lines insertObject:@"Doctor: failures found" atIndex:0];
+    }
+
+    return [lines componentsJoinedByString:@"\n"];
 }
 
 - (void)installCrispHiDPI:(NSMenuItem *)sender {
@@ -867,16 +1554,21 @@ static const NSUInteger kModeColType    = 10;
 
 // ── Settings actions ────────────────────────────────────────────────────────
 
-- (void)switchToggled:(NSSwitch *)sender {
+- (void)switchToggled:(NSButton *)sender {
     NSString *key = sender.identifier;
     [self flipPref:key];
+    sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
+    [self applySwitchAppearance:sender];
 
     if ([key isEqualToString:kAutoManage] && [self pref:kAutoManage]) {
         [self performAutoDisableIfNeeded];
     }
+    if ([key isEqualToString:kSmartRecovery] && [self pref:kSmartRecovery]) {
+        [self scheduleSmartRecoveryEvaluation];
+    }
 }
 
-- (void)loginSwitchToggled:(NSSwitch *)sender {
+- (void)loginSwitchToggled:(NSButton *)sender {
     SMAppService *service = [SMAppService mainAppService];
     NSError *error = nil;
 
@@ -895,6 +1587,7 @@ static const NSUInteger kModeColType    = 10;
 
     sender.state = (service.status == SMAppServiceStatusEnabled)
                    ? NSControlStateValueOn : NSControlStateValueOff;
+    [self applySwitchAppearance:sender];
 }
 
 - (void)toggleCheckSetting:(NSMenuItem *)sender {
@@ -924,18 +1617,62 @@ static const NSUInteger kModeColType    = 10;
 
 // ── Auto-manage logic ───────────────────────────────────────────────────────
 
+- (void)scheduleSmartRecoveryEvaluation {
+    NSInteger token = ++self.smartRecoveryToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kSmartRecoveryDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (token != self.smartRecoveryToken) return;
+        [self evaluateSmartRecovery];
+    });
+}
+
+- (void)evaluateSmartRecovery {
+    if (![self pref:kSmartRecovery]) return;
+    [self recoverBuiltInDisplayIfUnsafeWithTitle:@"Built-in Display Recovered"
+                                            body:@"No trusted external monitor is active."
+                                  logFailureName:@"Smart recovery"];
+}
+
+- (void)recoverBuiltInDisplayIfUnsafeWithTitle:(NSString *)title
+                                          body:(NSString *)body
+                                logFailureName:(NSString *)logFailureName {
+    if ([self hasTrustedActiveExternalDisplay]) return;
+
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    if (builtInID == 0) return;
+    if ([self isDisplayActive:builtInID]) return;
+
+    NSError *error = nil;
+    if ([self.displayManager enableDisplay:builtInID error:&error]) {
+        [self postNotification:title
+                          body:body
+                    identifier:kAutoManageNotifID];
+        [self rebuildMenu];
+        [self updateSafetyWatchdog];
+    } else {
+        NSLog(@"DisplayDisabler: %@ failed: %@", logFailureName, error);
+        [self postNotification:@"Recovery Failed"
+                          body:error.localizedDescription];
+    }
+}
+
 - (void)performAutoDisableIfNeeded {
     if (![self pref:kAutoManage]) return;
+    if (CFAbsoluteTimeGetCurrent() < self.suppressAutoDisableUntil) return;
 
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
     if (!builtIn || !builtIn.isActive) return;
-    if (![self.displayManager hasExternalDisplay]) return;
+    if (![self hasTrustedActiveExternalDisplay]) return;
 
     NSError *error = nil;
     if ([self.displayManager disableDisplay:builtIn.displayID error:&error]) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                                  forKey:kLastBuiltInDisplayID];
         [self postNotification:@"Built-in Display Disabled"
                           body:@"External monitor detected."
                     identifier:kAutoManageNotifID];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Auto-disable failed: %@", error);
     }
@@ -944,19 +1681,54 @@ static const NSUInteger kModeColType    = 10;
 - (void)performAutoReenableIfNeeded {
     if (![self pref:kAutoManage]) return;
 
-    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
-    if (!builtIn) return;
-    if (builtIn.isActive) return;
-    if ([self.displayManager hasExternalDisplay]) return;
+    [self recoverBuiltInDisplayIfUnsafeWithTitle:@"Built-in Display Re-enabled"
+                                            body:@"No external monitor detected."
+                                  logFailureName:@"Auto-reenable"];
+}
 
-    NSError *error = nil;
-    if ([self.displayManager enableDisplay:builtIn.displayID error:&error]) {
-        [self postNotification:@"Built-in Display Re-enabled"
-                          body:@"No external monitor detected."
-                    identifier:kAutoManageNotifID];
-    } else {
-        NSLog(@"DisplayDisabler: Auto-reenable failed: %@", error);
+- (BOOL)builtInDisplayNeedsSafetyWatchdog {
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    return (builtInID != 0 && ![self isDisplayActive:builtInID]);
+}
+
+- (void)updateSafetyWatchdog {
+    if (![self builtInDisplayNeedsSafetyWatchdog]) {
+        [self stopSafetyWatchdog];
+        return;
     }
+
+    if (self.safetyWatchdog) return;
+
+    dispatch_source_t timer =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer,
+                              dispatch_time(DISPATCH_TIME_NOW,
+                                            (int64_t)(kSafetyWatchdogInterval * NSEC_PER_SEC)),
+                              (uint64_t)(kSafetyWatchdogInterval * NSEC_PER_SEC),
+                              (uint64_t)(0.25 * NSEC_PER_SEC));
+
+    __weak __typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(timer, ^{
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (![strongSelf builtInDisplayNeedsSafetyWatchdog]) {
+            [strongSelf stopSafetyWatchdog];
+            return;
+        }
+
+        [strongSelf evaluateSmartRecovery];
+        [strongSelf performAutoReenableIfNeeded];
+    });
+
+    self.safetyWatchdog = timer;
+    dispatch_resume(timer);
+}
+
+- (void)stopSafetyWatchdog {
+    if (!self.safetyWatchdog) return;
+    dispatch_source_cancel(self.safetyWatchdog);
+    self.safetyWatchdog = nil;
 }
 
 @end

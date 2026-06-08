@@ -1,0 +1,21 @@
+=== Active Displays ===
+Display 1:
+  ID: 0x1 (1)
+  Name: Color LCD
+  Built-in: YES
+
+Display 2:
+  ID: 0x2 (2)
+  Name: DELL U2720Q
+  Built-in: NO
+
+=== Online Displays ===
+Display 1:
+  ID: 0x1 (1)
+  Name: Color LCD
+  Built-in: YES
+
+Display 2:
+  ID: 0x2 (2)
+  Name: DELL U2720Q
+  Built-in: NO
