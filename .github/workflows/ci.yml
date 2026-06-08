@@ -18,3 +18,14 @@ jobs:
           test -f docs/project-overview.md
           test -f docs/architecture.md
           test -f docs/operations.md
+      - name: Check example configuration
+        run: python3 -m json.tool examples/sample-config.json >/dev/null
+      - name: Run smart smoke tests
+        run: make test-smart
+
+  macos-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app bundle
+        run: make clean all

@@ -1,0 +1,16 @@
+Graphics/Displays:
+
+    Apple M3:
+
+      Chipset Model: Apple M3
+      Type: GPU
+      Bus: Built-In
+      Displays:
+        Color LCD:
+          Display Type: Built-In Retina LCD
+          Resolution: 2560 x 1664 Retina
+        DELL U2720Q:
+          Resolution: 3840 x 2160
+          UI Looks like: 1920 x 1080 @ 60.00Hz
+        Display:
+          Resolution: 3840 x 2160

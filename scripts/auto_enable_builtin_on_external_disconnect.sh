@@ -1,54 +1,59 @@
 #!/bin/zsh
 
-DISPLAY_DISABLE="/usr/local/bin/display_disable"
-CONFIG_FILE="$HOME/.displaydisabler-watchdog.conf"
-LOG_FILE="$HOME/Library/Logs/displaydisabler-watchdog.log"
-STATE_FILE="$HOME/Library/Logs/displaydisabler-watchdog-suspicious-count"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-BUILTIN_ID="1"
-TRUSTED_EXTERNAL_NAMES=""
-SUSPICIOUS_DISPLAY_NAMES="Display|Unknown Display"
-CHECK_CONFIRMATIONS="2"
-ENABLE_LOGGING="0"
-DEBUG_LOGGING="0"
-MAX_LOG_SIZE_KB="1024"
-
-if [ -f "$CONFIG_FILE" ]; then
-  source "$CONFIG_FILE"
+if [ -f "$SCRIPT_DIR/lib/displaydisabler_smart_lib.sh" ]; then
+  source "$SCRIPT_DIR/lib/displaydisabler_smart_lib.sh"
+elif [ -f "$SCRIPT_DIR/displaydisabler_smart_lib.sh" ]; then
+  source "$SCRIPT_DIR/displaydisabler_smart_lib.sh"
+else
+  exit 0
 fi
+
+dd_source_config
 
 rotate_log_if_needed() {
   if [ "$ENABLE_LOGGING" != "1" ]; then
     return
   fi
 
-  if [ ! -f "$LOG_FILE" ]; then
+  if [ ! -f "$DD_LOG_FILE" ]; then
     return
   fi
 
-  LOG_SIZE_KB="$(du -k "$LOG_FILE" 2>/dev/null | awk '{print $1}')"
+  LOG_SIZE_KB="$(du -k "$DD_LOG_FILE" 2>/dev/null | awk '{print $1}')"
 
   if [ -z "$LOG_SIZE_KB" ]; then
     return
   fi
 
   if [ "$LOG_SIZE_KB" -ge "$MAX_LOG_SIZE_KB" ]; then
-    mv "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
-    touch "$LOG_FILE" 2>/dev/null || true
+    mv "$DD_LOG_FILE" "$DD_LOG_FILE.1" 2>/dev/null || true
+    touch "$DD_LOG_FILE" 2>/dev/null || true
   fi
 }
 
 log() {
   if [ "$ENABLE_LOGGING" = "1" ]; then
+    mkdir -p "$(dirname "$DD_LOG_FILE")" 2>/dev/null || true
     rotate_log_if_needed
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$DD_LOG_FILE"
   fi
 }
 
 debug_log() {
   if [ "$ENABLE_LOGGING" = "1" ] && [ "$DEBUG_LOGGING" = "1" ]; then
+    mkdir -p "$(dirname "$DD_LOG_FILE")" 2>/dev/null || true
     rotate_log_if_needed
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$DD_LOG_FILE"
+  fi
+}
+
+enable_builtin_display() {
+  if [ "$ENABLE_LOGGING" = "1" ]; then
+    "$DISPLAY_DISABLE" enable "$BUILTIN_ID" >> "$DD_LOG_FILE" 2>&1
+  else
+    "$DISPLAY_DISABLE" enable "$BUILTIN_ID" >/dev/null 2>&1
   fi
 }
 
@@ -65,17 +70,11 @@ debug_log "$DD_OUTPUT"
 
 if [ "$DD_STATUS" -ne 0 ]; then
   log "display_disable list failed, trying to enable built-in display $BUILTIN_ID"
-  "$DISPLAY_DISABLE" enable "$BUILTIN_ID" >> "$LOG_FILE" 2>&1
+  enable_builtin_display
   exit 0
 fi
 
-ACTIVE_SECTION="$(echo "$DD_OUTPUT" | awk '
-  /=== Active Displays ===/ { flag=1; next }
-  /=== Online Displays ===/ { flag=0 }
-  flag
-')"
-
-DD_BUILTIN_ACTIVE_COUNT="$(echo "$ACTIVE_SECTION" | grep -c "Built-in: YES")"
+DD_BUILTIN_ACTIVE_COUNT="$(echo "$DD_OUTPUT" | dd_builtin_active_count_from_display_disable_output)"
 
 SP_OUTPUT="$(/usr/sbin/system_profiler SPDisplaysDataType 2>&1)"
 SP_STATUS=$?
@@ -83,29 +82,19 @@ SP_STATUS=$?
 log "system_profiler status=$SP_STATUS"
 debug_log "$SP_OUTPUT"
 
-SP_DISPLAY_NAMES="$(echo "$SP_OUTPUT" | awk '
-  /Displays:/ { in_displays=1; next }
-
-  in_displays && /^[[:space:]]{8}[^[:space:]].*:$/ {
-    name=$0
-    sub(/^[[:space:]]+/, "", name)
-    sub(/:$/, "", name)
-    print name
-  }
-')"
-
-SP_EXTERNAL_NAMES="$(echo "$SP_DISPLAY_NAMES" | grep -v "^Color LCD$" || true)"
-SP_EXTERNAL_COUNT="$(echo "$SP_EXTERNAL_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')"
+SP_DISPLAY_NAMES="$(echo "$SP_OUTPUT" | dd_display_names_from_system_profiler_output)"
+SP_EXTERNAL_NAMES="$(echo "$SP_DISPLAY_NAMES" | dd_external_display_names_from_names)"
+SP_EXTERNAL_COUNT="$(echo "$SP_EXTERNAL_NAMES" | dd_nonempty_line_count)"
 
 TRUSTED_COUNT=0
 SUSPICIOUS_NAME_COUNT=0
 
 if [ -n "$TRUSTED_EXTERNAL_NAMES" ]; then
-  TRUSTED_COUNT="$(echo "$SP_EXTERNAL_NAMES" | grep -E -c "^(${TRUSTED_EXTERNAL_NAMES})$" || true)"
+  TRUSTED_COUNT="$(dd_match_count "$SP_EXTERNAL_NAMES" "$TRUSTED_EXTERNAL_NAMES")"
 fi
 
 if [ -n "$SUSPICIOUS_DISPLAY_NAMES" ]; then
-  SUSPICIOUS_NAME_COUNT="$(echo "$SP_EXTERNAL_NAMES" | grep -E -c "^(${SUSPICIOUS_DISPLAY_NAMES})$" || true)"
+  SUSPICIOUS_NAME_COUNT="$(dd_match_count "$SP_EXTERNAL_NAMES" "$SUSPICIOUS_DISPLAY_NAMES")"
 fi
 
 log "display_names=$(echo "$SP_DISPLAY_NAMES" | tr '\n' ',' )"
@@ -113,7 +102,7 @@ log "external_count=$SP_EXTERNAL_COUNT trusted_count=$TRUSTED_COUNT suspicious_n
 
 # If the built-in display is already active, reset state and do nothing.
 if [ "$DD_BUILTIN_ACTIVE_COUNT" -gt 0 ]; then
-  echo 0 > "$STATE_FILE"
+  echo 0 > "$DD_STATE_FILE"
   log "built-in already active, nothing to do"
   exit 0
 fi
@@ -121,7 +110,7 @@ fi
 # If the built-in display is inactive but a trusted external display is present,
 # keep the built-in display disabled.
 if [ "$TRUSTED_COUNT" -gt 0 ]; then
-  echo 0 > "$STATE_FILE"
+  echo 0 > "$DD_STATE_FILE"
   log "built-in inactive, trusted external display detected, nothing to do"
   exit 0
 fi
@@ -144,19 +133,19 @@ fi
 if [ "$SHOULD_ENABLE" = "1" ]; then
   CONFIRMATION_COUNT=0
 
-  if [ -f "$STATE_FILE" ]; then
-    CONFIRMATION_COUNT="$(cat "$STATE_FILE" 2>/dev/null)"
+  if [ -f "$DD_STATE_FILE" ]; then
+    CONFIRMATION_COUNT="$(cat "$DD_STATE_FILE" 2>/dev/null)"
   fi
 
   CONFIRMATION_COUNT=$((CONFIRMATION_COUNT + 1))
-  echo "$CONFIRMATION_COUNT" > "$STATE_FILE"
+  echo "$CONFIRMATION_COUNT" > "$DD_STATE_FILE"
 
   log "unsafe display state confirmation count=$CONFIRMATION_COUNT"
 
   if [ "$CONFIRMATION_COUNT" -ge "$CHECK_CONFIRMATIONS" ]; then
     log "enabling built-in display $BUILTIN_ID"
-    "$DISPLAY_DISABLE" enable "$BUILTIN_ID" >> "$LOG_FILE" 2>&1
-    echo 0 > "$STATE_FILE"
+    enable_builtin_display
+    echo 0 > "$DD_STATE_FILE"
     exit 0
   fi
 
