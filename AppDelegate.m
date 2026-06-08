@@ -373,9 +373,8 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     NSMenu *submenu = [[NSMenu alloc] init];
     submenu.autoenablesItems = NO;
 
-    // Current-level header, when the display reports a readable brightness
-    // (built-in via DisplayServicesGetBrightness). DDC reads over IOAVService
-    // are fragile so we don't expose them here.
+    // Current-level header, when DisplayServices reports readable brightness.
+    // DDC reads over IOAVService are fragile so we don't expose them here.
     int cur = [[Brightness shared] brightnessPercentForDisplay:displayID];
     if (cur >= 0) {
         [self addLabelToMenu:submenu
@@ -1067,6 +1066,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     if ([[Brightness shared] setBrightnessPercent:pct forDisplay:did error:&error]) {
         [self postNotification:@"Brightness"
                           body:[NSString stringWithFormat:@"%@ set to %u%%.", name, pct]];
+        [self rebuildMenu];
     } else {
         NSLog(@"DisplayDisabler: Failed to set brightness on 0x%X: %@", did, error);
         [self postNotification:@"Brightness Failed"
