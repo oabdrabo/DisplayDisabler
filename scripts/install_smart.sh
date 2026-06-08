@@ -5,6 +5,9 @@ set -e
 REPO="oabdrabo/DisplayDisabler"
 BINARY_NAME="display_disable"
 INSTALL_PATH="/usr/local/bin/$BINARY_NAME"
+APP_NAME="DisplayDisabler"
+APP_BUNDLE="$APP_NAME.app"
+APP_INSTALL_PATH="/Applications/$APP_BUNDLE"
 
 ZSHRC="$HOME/.zshrc"
 SCRIPTS_DIR="$HOME/Scripts"
@@ -35,12 +38,16 @@ NO_WATCHDOG="0"
 NO_DOWNLOAD="0"
 ASSUME_YES="0"
 REPAIR="0"
+INSTALL_PROFILE=""
 
 usage() {
   cat <<EOF_USAGE
 Usage: ./scripts/install_smart.sh [options]
 
 Options:
+  --app           Install the menu-bar app only
+  --cli           Install CLI aliases/helpers only
+  --full          Install both menu-bar app and CLI helpers
   --dry-run       Show planned writes without changing files
   --repair        Reinstall helper files, aliases and LaunchAgent using defaults
   --no-watchdog   Install aliases/helpers but skip the safety LaunchAgent
@@ -52,6 +59,15 @@ EOF_USAGE
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --app)
+      INSTALL_PROFILE="app"
+      ;;
+    --cli)
+      INSTALL_PROFILE="cli"
+      ;;
+    --full)
+      INSTALL_PROFILE="full"
+      ;;
     --dry-run)
       DRY_RUN="1"
       ;;
@@ -106,6 +122,23 @@ run_or_echo() {
   fi
 }
 
+prompt_choice() {
+  local __var="$1"
+  local prompt="$2"
+  local default="$3"
+  local answer
+
+  if [ "$ASSUME_YES" = "1" ]; then
+    echo "$prompt [$default]: $default"
+    eval "$__var=\"\$default\""
+    return
+  fi
+
+  read "answer?$prompt [$default]: "
+  answer="${answer:-$default}"
+  eval "$__var=\"\$answer\""
+}
+
 prompt_default() {
   local __var="$1"
   local prompt="$2"
@@ -123,6 +156,24 @@ prompt_default() {
   eval "$__var=\"\$answer\""
 }
 
+normalize_install_profile() {
+  local profile="$1"
+  case "$profile" in
+    app|a|menu|menubar|menu-bar)
+      echo "app"
+      ;;
+    cli|c|shell)
+      echo "cli"
+      ;;
+    full|f|both|all)
+      echo "full"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
 validate_alias_name() {
   local alias_name="$1"
   if [[ ! "$alias_name" =~ '^[A-Za-z0-9_][A-Za-z0-9_-]*$' ]]; then
@@ -138,6 +189,24 @@ validate_positive_int() {
     echo "$label must be a positive integer." >&2
     exit 1
   fi
+}
+
+install_menu_bar_app() {
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] Would build $APP_BUNDLE with make clean all"
+    echo "[dry-run] Would install $APP_BUNDLE to $APP_INSTALL_PATH"
+    return
+  fi
+
+  echo
+  echo "Building menu-bar app..."
+  make clean all
+
+  echo
+  echo "Installing menu-bar app to $APP_INSTALL_PATH"
+  rm -rf "$APP_INSTALL_PATH"
+  cp -R "$APP_BUNDLE" "$APP_INSTALL_PATH"
+  echo "Installed $APP_INSTALL_PATH"
 }
 
 install_binary_if_missing() {
@@ -418,6 +487,40 @@ cleanup_old_watchdog_names() {
   fi
 }
 
+if [ -z "$INSTALL_PROFILE" ]; then
+  echo "Choose installation type:"
+  echo "  app  - menu-bar app only (recommended)"
+  echo "  cli  - shell aliases/helpers only"
+  echo "  full - app plus CLI fallback"
+  echo
+  prompt_choice INSTALL_PROFILE "Install type: app, cli or full" "app"
+fi
+
+INSTALL_PROFILE="$(normalize_install_profile "$INSTALL_PROFILE")"
+if [ -z "$INSTALL_PROFILE" ]; then
+  echo "Invalid install type. Use app, cli, or full." >&2
+  exit 1
+fi
+
+echo "Install type: $INSTALL_PROFILE"
+echo
+
+if [ "$INSTALL_PROFILE" = "app" ] || [ "$INSTALL_PROFILE" = "full" ]; then
+  install_menu_bar_app
+fi
+
+if [ "$INSTALL_PROFILE" = "app" ]; then
+  echo
+  echo "Done."
+  echo
+  echo "Open the menu-bar app:"
+  echo "  open $APP_INSTALL_PATH"
+  echo
+  echo "Then use Settings -> Trusted Displays to trust your current monitor."
+  echo
+  exit 0
+fi
+
 cleanup_old_watchdog_names
 install_binary_if_missing
 collect_display_disable_output
@@ -516,7 +619,7 @@ else
 fi
 
 echo
-echo "Aliases added to $ZSHRC:"
+echo "CLI aliases added to $ZSHRC:"
 echo "  $OFF_ALIAS     -> $SAFE_TARGET"
 echo "  $ON_ALIAS      -> $INSTALL_PATH enable $BUILTIN_ID"
 echo "  $TRUST_ALIAS   -> $SMART_TARGET trust"
@@ -529,4 +632,9 @@ echo "Then use:"
 echo "  $OFF_ALIAS"
 echo "  $ON_ALIAS"
 echo "  $STATUS_ALIAS"
+if [ "$INSTALL_PROFILE" = "full" ]; then
+  echo
+  echo "Open the menu-bar app:"
+  echo "  open $APP_INSTALL_PATH"
+fi
 echo

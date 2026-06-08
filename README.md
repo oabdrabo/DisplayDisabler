@@ -22,7 +22,38 @@ The app now includes:
 The app recovery path is event-driven, not polling-based. The short delay is
 only a confirmation window after macOS reports a display topology change.
 
-## Smart installer, aliases and safety watchdog
+## Unified installer
+
+Use the installer as the single entry point:
+
+```bash
+./scripts/install_smart.sh
+```
+
+It asks which profile to install:
+
+- `app`: menu-bar app only, recommended
+- `cli`: shell aliases/helpers only
+- `full`: menu-bar app plus CLI fallback
+
+Non-interactive profile flags are also available:
+
+```bash
+./scripts/install_smart.sh --app
+./scripts/install_smart.sh --cli
+./scripts/install_smart.sh --full
+```
+
+After an app or full install, open:
+
+```bash
+open /Applications/DisplayDisabler.app
+```
+
+Then use `Settings -> Trusted Displays` from the menu-bar app to trust your
+current external monitor.
+
+## CLI aliases and safety watchdog
 
 This fork also keeps an optional smart installer on top of the original
 `display_disable` binary for CLI users.
@@ -38,17 +69,18 @@ The smart installer can:
 - run lightweight status and doctor checks
 - fully uninstall the smart setup and the `display_disable` binary
 
-### Smart install
+### CLI install
 
-Run:
+Run the installer in CLI mode:
 
 ```bash
-./scripts/install_smart.sh
+./scripts/install_smart.sh --cli
 ```
 
 Useful installer options:
 
 ```bash
+./scripts/install_smart.sh --full
 ./scripts/install_smart.sh --dry-run
 ./scripts/install_smart.sh --repair
 ./scripts/install_smart.sh --no-watchdog
