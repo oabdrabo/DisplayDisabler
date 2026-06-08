@@ -926,46 +926,11 @@ static void displayReconfigCallback(CGDirectDisplayID display __unused,
         CGDisplayModeRelease(curMode);
     }
 
-    // Resolve the panel mode the force will switch to. Single picker for both
-    // panel-derived and synthetic targets, hard aspect constraint (mismatched
-    // aspect → mirror bars). Within the surviving candidates the picker
-    // prefers an exact 2× pixel match (true 1:1 mirror downsample), then
-    // falls within a single sweep to the smallest scale deviation, with a
-    // mild bias toward Standard variants.
-    //
-    // Note on notched panels: macOS's mirror compositor unconditionally
-    // auto-switches the destination panel to a runtime mode that matches
-    // the source virtual's logical dimensions and shifts content below the
-    // notch line — overriding whichever mode this picker selects. The
-    // strip beside the camera notch ends up dark regardless. This is
-    // destination-driven OS behavior with no override path; Crisp HiDPI
-    // (panel-native plist injection) is the only architecture that can
-    // render at custom logical sizes without that dead strip.
+    // Keep the panel mode list around only to capture the pre-force mode for
+    // restore-on-stop. The old "pick a switch mode before mirroring" path is
+    // intentionally gone: macOS immediately substitutes a mirror-runtime mode
+    // for the destination panel, so explicit panel switches do not stick.
     NSArray<DDDisplayMode *> *panelModes = [self modesForDisplay:displayID];
-
-    size_t wantPW = targetLogicalWidth  * 2;
-    size_t wantPH = targetLogicalHeight * 2;
-    double targetAspect = (double)wantPW / (double)wantPH;
-
-    CGDisplayModeRef switchMode = NULL;
-    double bestScore = INFINITY;
-    for (DDDisplayMode *m in panelModes) {
-        if (!m.modeRef) continue;
-        double mAspect = (double)m.pixelWidth / (double)m.pixelHeight;
-        if (fabs(mAspect - targetAspect) / targetAspect > kDDAspectTolerance) continue;
-
-        double score;
-        if (m.pixelWidth == wantPW && m.pixelHeight == wantPH) {
-            // Exact 2× pixel match — pure 1:1 mirror, supersample-free path.
-            score = m.isHiDPI ? -0.5 : -1.0;
-        } else {
-            double rw = (double)m.pixelWidth  / (double)wantPW;
-            double rh = (double)m.pixelHeight / (double)wantPH;
-            score = MAX(fabs(1.0 - rw), fabs(1.0 - rh));
-            if (!m.isHiDPI) score *= 0.95;  // mild Standard bias
-        }
-        if (score < bestScore) { bestScore = score; switchMode = m.modeRef; }
-    }
 
     // Capture the current panel mode for restore-on-stop. Captured before
     // mirror so it reflects the user-visible pre-force mode, not the runtime
