@@ -114,14 +114,6 @@ elif [ "$REPAIR" = "1" ]; then
 fi
 echo
 
-run_or_echo() {
-  if [ "$DRY_RUN" = "1" ]; then
-    echo "[dry-run] $*"
-  else
-    "$@"
-  fi
-}
-
 prompt_choice() {
   local __var="$1"
   local prompt="$2"

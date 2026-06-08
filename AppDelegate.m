@@ -358,13 +358,10 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
                 displayID:display.displayID];
 
     if (!display.isBuiltIn) {
+        BOOL trusted = [self isTrustedExternalDisplay:display];
         [self addActionToMenu:menu
-                        title:([self isTrustedExternalDisplay:display]
-                               ? @"Forget Trusted Display"
-                               : @"Trust This Display")
-                       action:([self isTrustedExternalDisplay:display]
-                               ? @selector(forgetTrustedDisplay:)
-                               : @selector(trustDisplay:))
+                        title:(trusted ? @"Forget Trusted Display" : @"Trust This Display")
+                       action:(trusted ? @selector(forgetTrustedDisplay:) : @selector(trustDisplay:))
                     displayID:display.displayID];
     }
 
@@ -660,10 +657,15 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     submenu.autoenablesItems = NO;
 
     NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
     NSArray<DDDisplayInfo *> *external = [self externalDisplaysActiveOnly:NO];
     NSUInteger trustedConnected = 0;
+    BOOL hasStableExternal = NO;
     for (DDDisplayInfo *d in external) {
-        if ([self isTrustedExternalDisplay:d]) trustedConnected++;
+        if (![self isSuspiciousExternalName:d.name]) hasStableExternal = YES;
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) {
+            trustedConnected++;
+        }
     }
 
     [self addLabelToMenu:submenu title:
@@ -676,7 +678,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
                action:@selector(trustCurrentExternalDisplays:)
         keyEquivalent:@""];
     trustCurrent.target = self;
-    trustCurrent.enabled = ([self stableExternalDisplaysActiveOnly:NO].count > 0);
+    trustCurrent.enabled = hasStableExternal;
     [submenu addItem:trustCurrent];
 
     if (records.count > 0) {
@@ -754,9 +756,10 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
             [name isEqualToString:@"Unknown Display"]);
 }
 
-- (NSArray<DDDisplayInfo *> *)externalDisplaysActiveOnly:(BOOL)activeOnly {
+- (NSArray<DDDisplayInfo *> *)externalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                activeOnly:(BOOL)activeOnly {
     NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
-    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+    for (DDDisplayInfo *d in displays) {
         if (d.isBuiltIn) continue;
         if (activeOnly && !d.isActive) continue;
         [result addObject:d];
@@ -764,13 +767,24 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     return result;
 }
 
-- (NSArray<DDDisplayInfo *> *)stableExternalDisplaysActiveOnly:(BOOL)activeOnly {
+- (NSArray<DDDisplayInfo *> *)externalDisplaysActiveOnly:(BOOL)activeOnly {
+    return [self externalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                   activeOnly:activeOnly];
+}
+
+- (NSArray<DDDisplayInfo *> *)stableExternalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                      activeOnly:(BOOL)activeOnly {
     NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
-    for (DDDisplayInfo *d in [self externalDisplaysActiveOnly:activeOnly]) {
+    for (DDDisplayInfo *d in [self externalDisplaysFromDisplays:displays activeOnly:activeOnly]) {
         if ([self isSuspiciousExternalName:d.name]) continue;
         [result addObject:d];
     }
     return result;
+}
+
+- (NSArray<DDDisplayInfo *> *)stableExternalDisplaysActiveOnly:(BOOL)activeOnly {
+    return [self stableExternalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                         activeOnly:activeOnly];
 }
 
 - (NSString *)fingerprintForDisplay:(DDDisplayInfo *)display {
@@ -812,29 +826,62 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     return records;
 }
 
+- (NSSet<NSString *> *)trustedDisplayFingerprintsFromRecords:(NSArray<NSDictionary *> *)records {
+    NSMutableSet<NSString *> *fingerprints = [NSMutableSet set];
+    for (NSDictionary *record in records) {
+        NSString *fingerprint = record[@"fingerprint"];
+        if ([fingerprint isKindOfClass:NSString.class] && fingerprint.length > 0) {
+            [fingerprints addObject:fingerprint];
+        }
+    }
+    return fingerprints;
+}
+
 - (void)setTrustedDisplayRecords:(NSArray<NSDictionary *> *)records {
     [[NSUserDefaults standardUserDefaults] setObject:records forKey:kTrustedDisplays];
 }
 
-- (BOOL)isTrustedExternalDisplay:(DDDisplayInfo *)display {
+- (BOOL)isTrustedExternalDisplay:(DDDisplayInfo *)display
+             trustedFingerprints:(NSSet<NSString *> *)trustedFingerprints {
     if (!display || display.isBuiltIn) return NO;
-    NSString *fingerprint = [self fingerprintForDisplay:display];
-    for (NSDictionary *record in [self trustedDisplayRecords]) {
-        if ([record[@"fingerprint"] isEqualToString:fingerprint]) return YES;
-    }
-    return NO;
+    return [trustedFingerprints containsObject:[self fingerprintForDisplay:display]];
 }
 
-- (NSArray<DDDisplayInfo *> *)trustedExternalDisplaysActiveOnly:(BOOL)activeOnly {
+- (BOOL)isTrustedExternalDisplay:(DDDisplayInfo *)display {
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    return [self isTrustedExternalDisplay:display
+                      trustedFingerprints:[self trustedDisplayFingerprintsFromRecords:records]];
+}
+
+- (NSArray<DDDisplayInfo *> *)trustedExternalDisplaysFromDisplays:(NSArray<DDDisplayInfo *> *)displays
+                                                       activeOnly:(BOOL)activeOnly
+                                              trustedFingerprints:(NSSet<NSString *> *)trustedFingerprints {
     NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
-    for (DDDisplayInfo *d in [self externalDisplaysActiveOnly:activeOnly]) {
-        if ([self isTrustedExternalDisplay:d]) [result addObject:d];
+    for (DDDisplayInfo *d in [self externalDisplaysFromDisplays:displays activeOnly:activeOnly]) {
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) {
+            [result addObject:d];
+        }
     }
     return result;
 }
 
+- (NSArray<DDDisplayInfo *> *)trustedExternalDisplaysActiveOnly:(BOOL)activeOnly {
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    return [self trustedExternalDisplaysFromDisplays:[self.displayManager allDisplays]
+                                         activeOnly:activeOnly
+                                trustedFingerprints:[self trustedDisplayFingerprintsFromRecords:records]];
+}
+
 - (BOOL)hasTrustedActiveExternalDisplay {
-    return [self trustedExternalDisplaysActiveOnly:YES].count > 0;
+    NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    if (records.count == 0) return NO;
+
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+        if (d.isBuiltIn || !d.isActive) continue;
+        if ([self isTrustedExternalDisplay:d trustedFingerprints:trustedFingerprints]) return YES;
+    }
+    return NO;
 }
 
 - (NSUInteger)trustExternalDisplays:(NSArray<DDDisplayInfo *> *)displays {
@@ -1158,9 +1205,13 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 - (NSString *)systemStatusText {
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
-    NSArray<DDDisplayInfo *> *external = [self externalDisplaysActiveOnly:NO];
-    NSArray<DDDisplayInfo *> *trustedActive = [self trustedExternalDisplaysActiveOnly:YES];
     NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    NSArray<DDDisplayInfo *> *external = [self externalDisplaysFromDisplays:displays activeOnly:NO];
+    NSArray<DDDisplayInfo *> *trustedActive =
+        [self trustedExternalDisplaysFromDisplays:displays
+                                       activeOnly:YES
+                              trustedFingerprints:trustedFingerprints];
 
     NSUInteger activeCount = 0;
     for (DDDisplayInfo *d in displays) {
@@ -1199,9 +1250,14 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
-    NSArray<DDDisplayInfo *> *stableExternal = [self stableExternalDisplaysActiveOnly:NO];
-    NSArray<DDDisplayInfo *> *trustedActive = [self trustedExternalDisplaysActiveOnly:YES];
     NSArray<NSDictionary *> *records = [self trustedDisplayRecords];
+    NSSet<NSString *> *trustedFingerprints = [self trustedDisplayFingerprintsFromRecords:records];
+    NSArray<DDDisplayInfo *> *stableExternal =
+        [self stableExternalDisplaysFromDisplays:displays activeOnly:NO];
+    NSArray<DDDisplayInfo *> *trustedActive =
+        [self trustedExternalDisplaysFromDisplays:displays
+                                       activeOnly:YES
+                              trustedFingerprints:trustedFingerprints];
     BOOL hasFailure = NO;
     BOOL hasWarning = NO;
 

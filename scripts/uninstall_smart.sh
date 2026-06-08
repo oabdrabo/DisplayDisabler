@@ -23,7 +23,7 @@ LIB_SCRIPT="$SCRIPTS_DIR/displaydisabler_smart_lib.sh"
 
 LOG_FILE="$HOME/Library/Logs/displaydisabler-watchdog.log"
 STATE_FILE="$HOME/Library/Logs/displaydisabler-watchdog-suspicious-count"
-BINARY_PATH="/usr/local/bin/display_disable"
+BINARY_PATH="${BINARY_PATH:-/usr/local/bin/display_disable}"
 
 ALIAS_BEGIN="# >>> DisplayDisabler smart aliases >>>"
 ALIAS_END="# <<< DisplayDisabler smart aliases <<<"
@@ -314,7 +314,7 @@ if [ "$UNINSTALL_PROFILE" = "cli" ] || [ "$UNINSTALL_PROFILE" = "full" ]; then
       if [ "$DRY_RUN" = "1" ]; then
         echo "[dry-run] Would remove binary: $BINARY_PATH"
       elif [ -f "$BINARY_PATH" ]; then
-        sudo rm "$BINARY_PATH"
+        rm -f "$BINARY_PATH" 2>/dev/null || sudo rm "$BINARY_PATH"
         echo "Removed display_disable binary:"
         echo "  $BINARY_PATH"
       else
