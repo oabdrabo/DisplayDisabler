@@ -70,6 +70,35 @@ run_system_profiler_displays() {
   eval "$__status_var=$cmd_status"
 }
 
+defaults_read_value() {
+  local key="$1"
+  defaults read com.local.DisplayDisabler "$key" 2>/dev/null || true
+}
+
+installed_profile() {
+  if [ -n "$DD_INSTALL_PROFILE" ]; then
+    echo "$DD_INSTALL_PROFILE"
+    return
+  fi
+
+  if [ -d "$DD_APP_PATH" ] && [ ! -x "$DISPLAY_DISABLE" ] && [ ! -f "$DD_CONFIG_FILE" ]; then
+    echo "app"
+    return
+  fi
+
+  if [ -d "$DD_APP_PATH" ] && { [ -x "$DISPLAY_DISABLE" ] || [ -f "$DD_CONFIG_FILE" ]; }; then
+    echo "full"
+    return
+  fi
+
+  if [ -x "$DISPLAY_DISABLE" ] || [ -f "$DD_CONFIG_FILE" ] || [ -f "$DD_PLIST_PATH" ]; then
+    echo "cli"
+    return
+  fi
+
+  echo "none"
+}
+
 status_command() {
   local dd_output=""
   local dd_status=0
@@ -84,6 +113,15 @@ status_command() {
   local trusted_count=0
   local suspicious_count=0
   local launchd_state="unknown"
+  local profile=""
+  local auto_manage=""
+  local smart_recovery=""
+  local last_builtin_id=""
+
+  profile="$(installed_profile)"
+  auto_manage="$(defaults_read_value AutoManageBuiltIn)"
+  smart_recovery="$(defaults_read_value SmartRecoveryEnabled)"
+  last_builtin_id="$(defaults_read_value LastBuiltInDisplayID)"
 
   run_display_disable_list dd_output dd_status
   run_system_profiler_displays sp_output sp_status
@@ -112,6 +150,8 @@ status_command() {
 
   echo "DisplayDisabler smart status"
   echo "----------------------------"
+  echo "install profile: $profile"
+  echo "menu-bar app: $([ -d "$DD_APP_PATH" ] && echo "present" || echo "missing") ($DD_APP_PATH)"
   if [ -x "$DISPLAY_DISABLE" ]; then
     echo "binary: ok ($DISPLAY_DISABLE)"
   else
@@ -123,8 +163,11 @@ status_command() {
   if [ -n "$detected_builtin_id" ]; then
     echo "detected built-in id: $detected_builtin_id"
   fi
+  echo "app last built-in id: ${last_builtin_id:-unset}"
   echo "active displays: $active_count"
   echo "built-in active count: $builtin_active_count"
+  echo "app auto-manage: ${auto_manage:-unset}"
+  echo "app smart recovery: ${smart_recovery:-unset}"
   echo "trusted external regex: ${TRUSTED_EXTERNAL_NAMES:-unset}"
   echo "suspicious external regex: ${SUSPICIOUS_DISPLAY_NAMES:-unset}"
   echo "system_profiler: status=$sp_status"
@@ -146,24 +189,69 @@ doctor_command() {
   local failures=0
   local dd_output=""
   local dd_status=0
+  local profile=""
+  local app_present=0
+  local cli_required=0
+  local app_required=0
+  local auto_manage=""
+  local smart_recovery=""
+  local last_builtin_id=""
+
+  profile="$(installed_profile)"
+  auto_manage="$(defaults_read_value AutoManageBuiltIn)"
+  smart_recovery="$(defaults_read_value SmartRecoveryEnabled)"
+  last_builtin_id="$(defaults_read_value LastBuiltInDisplayID)"
+  [ -d "$DD_APP_PATH" ] && app_present=1
+
+  case "$profile" in
+    app)
+      app_required=1
+      ;;
+    cli)
+      cli_required=1
+      ;;
+    full)
+      app_required=1
+      cli_required=1
+      ;;
+    *)
+      ;;
+  esac
 
   echo "DisplayDisabler smart doctor"
   echo "----------------------------"
+  echo "profile: $profile"
+
+  if [ "$app_present" -eq 1 ]; then
+    echo "ok: menu-bar app is installed at $DD_APP_PATH"
+  elif [ "$app_required" -eq 1 ]; then
+    echo "fail: menu-bar app is missing at $DD_APP_PATH"
+    failures=$((failures + 1))
+  else
+    echo "info: menu-bar app is not installed at $DD_APP_PATH"
+  fi
 
   if [ -x "$DISPLAY_DISABLE" ]; then
     echo "ok: display_disable is executable"
-  else
+  elif [ "$cli_required" -eq 1 ]; then
     echo "fail: display_disable is missing or not executable at $DISPLAY_DISABLE"
     failures=$((failures + 1))
+  else
+    echo "info: display_disable CLI fallback is not installed at $DISPLAY_DISABLE"
   fi
 
   if [ -f "$DD_CONFIG_FILE" ]; then
     echo "ok: config exists"
+  elif [ "$cli_required" -eq 1 ]; then
+    echo "fail: config is missing at $DD_CONFIG_FILE"
+    failures=$((failures + 1))
   else
-    echo "warn: config is missing at $DD_CONFIG_FILE"
+    echo "info: CLI watchdog config is not installed at $DD_CONFIG_FILE"
   fi
 
-  if [ -n "$BUILTIN_ID" ]; then
+  if [ "$cli_required" -eq 0 ]; then
+    echo "info: CLI built-in id is not required for profile '$profile'"
+  elif [ -n "$BUILTIN_ID" ]; then
     echo "ok: built-in id is set to $BUILTIN_ID"
   else
     echo "fail: built-in id is not set"
@@ -173,9 +261,11 @@ doctor_command() {
   run_display_disable_list dd_output dd_status
   if [ "$dd_status" -eq 0 ]; then
     echo "ok: display_disable list succeeded"
-  else
+  elif [ "$cli_required" -eq 1 ]; then
     echo "fail: display_disable list failed with status $dd_status"
     failures=$((failures + 1))
+  else
+    echo "info: display_disable list unavailable; skipped for profile '$profile'"
   fi
 
   if [ -f "$DD_PLIST_PATH" ]; then
@@ -190,7 +280,11 @@ doctor_command() {
       echo "warn: plutil is unavailable, plist not checked"
     fi
   else
-    echo "warn: watchdog plist is not installed"
+    if [ "$cli_required" -eq 1 ]; then
+      echo "warn: watchdog plist is not installed"
+    else
+      echo "info: LaunchAgent watchdog is not installed for profile '$profile'"
+    fi
   fi
 
   if command -v launchctl >/dev/null 2>&1 && [ -f "$DD_PLIST_PATH" ]; then
@@ -198,6 +292,13 @@ doctor_command() {
       echo "ok: watchdog LaunchAgent is loaded"
     else
       echo "warn: watchdog LaunchAgent is not loaded"
+    fi
+  fi
+
+  if [ "$app_present" -eq 1 ]; then
+    echo "app defaults: AutoManageBuiltIn=${auto_manage:-unset} SmartRecoveryEnabled=${smart_recovery:-unset} LastBuiltInDisplayID=${last_builtin_id:-unset}"
+    if [ "${auto_manage:-0}" = "1" ] && [ -z "$last_builtin_id" ]; then
+      echo "warn: auto-manage is enabled but the app has not recorded a built-in display id yet"
     fi
   fi
 

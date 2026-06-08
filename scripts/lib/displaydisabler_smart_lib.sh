@@ -6,12 +6,14 @@
 
 dd_init_defaults() {
   DISPLAY_DISABLE="${DISPLAY_DISABLE:-/usr/local/bin/display_disable}"
+  DD_APP_PATH="${DD_APP_PATH:-/Applications/DisplayDisabler.app}"
   DD_CONFIG_FILE="${DD_CONFIG_FILE:-$HOME/.displaydisabler-watchdog.conf}"
   DD_LOG_FILE="${DD_LOG_FILE:-$HOME/Library/Logs/displaydisabler-watchdog.log}"
   DD_STATE_FILE="${DD_STATE_FILE:-$HOME/Library/Logs/displaydisabler-watchdog-suspicious-count}"
   DD_WATCHDOG_LABEL="${DD_WATCHDOG_LABEL:-com.displaydisabler.watchdog}"
   DD_PLIST_PATH="${DD_PLIST_PATH:-$HOME/Library/LaunchAgents/$DD_WATCHDOG_LABEL.plist}"
 
+  DD_INSTALL_PROFILE="${DD_INSTALL_PROFILE:-}"
   BUILTIN_ID="${BUILTIN_ID:-1}"
   TRUSTED_EXTERNAL_NAMES="${TRUSTED_EXTERNAL_NAMES:-}"
   SUSPICIOUS_DISPLAY_NAMES="${SUSPICIOUS_DISPLAY_NAMES:-Display|Unknown Display}"

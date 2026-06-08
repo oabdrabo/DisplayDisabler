@@ -42,8 +42,9 @@ AppIcon.icns: build_icon.m
 icon: AppIcon.icns
 
 test-smart:
-	zsh -n scripts/*.sh scripts/lib/*.sh tests/smoke/test_smart_parsers.sh tests/smoke/test_uninstall_smart.sh
+	zsh -n scripts/*.sh scripts/lib/*.sh tests/smoke/test_smart_parsers.sh tests/smoke/test_uninstall_smart.sh tests/smoke/test_smart_status_doctor.sh
 	zsh tests/smoke/test_smart_parsers.sh
+	zsh tests/smoke/test_smart_status_doctor.sh
 	zsh tests/smoke/test_uninstall_smart.sh
 	zsh scripts/install_smart.sh --dry-run --app --yes >/dev/null
 	zsh scripts/install_smart.sh --dry-run --cli --no-download --yes --no-watchdog >/dev/null

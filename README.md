@@ -136,12 +136,14 @@ Available commands:
 ~/Scripts/displaydisabler-smart trust
 ```
 
-`status` reports the binary path, config, detected built-in display, active
-display count, trusted external display count and watchdog LaunchAgent state.
+`status` reports the detected install profile, menu-bar app path, binary path,
+config, detected built-in display, app safety defaults, active display count,
+trusted external display count and watchdog LaunchAgent state.
 
-`doctor` runs lightweight setup checks and exits non-zero only for critical
-failures such as a missing `display_disable` binary or a failing
-`display_disable list` command.
+`doctor` runs lightweight setup checks and is profile-aware. In app-only
+installs, missing CLI pieces are reported as `info`; in CLI/full installs,
+missing `display_disable`, config or failing `display_disable list` checks are
+reported as failures and return a non-zero exit code.
 
 ### CLI safety watchdog
 

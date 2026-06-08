@@ -18,6 +18,7 @@ static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
 static NSString * const kSmartRecovery     = @"SmartRecoveryEnabled";
 static NSString * const kTrustedDisplays   = @"TrustedExternalDisplays";
+static NSString * const kLastBuiltInDisplayID = @"LastBuiltInDisplayID";
 
 // Notification identifier used for auto-manage events so consecutive
 // disable/re-enable banners replace each other instead of stacking.
@@ -29,6 +30,8 @@ static const CGFloat kSwitchRowWidth   = 290;
 static const CGFloat kSwitchRowHeight  = 28;
 static const CGFloat kSwitchRowPad     = 18;
 static const CGFloat kSwitchLabelGap   = 8;
+static const CGFloat kSwitchWidth      = 36;
+static const CGFloat kSwitchHeight     = 20;
 
 // ── Modes-submenu layout ────────────────────────────────────────────────────
 // Column widths (in chars) tuned for a monospaced font. Covers 8K + 5-digit
@@ -40,12 +43,64 @@ static const NSUInteger kModeColType    = 10;
 // Display topology changes arrive in bursts; this delay lets macOS settle
 // before the event-driven recovery check decides whether to re-enable built-in.
 static const NSTimeInterval kSmartRecoveryDelay = 1.25;
+static const NSTimeInterval kSafetyWatchdogInterval = 2.0;
+
+@interface DDSwitchButton : NSButton
+@end
+
+@implementation DDSwitchButton
+
+- (instancetype)init {
+    self = [super initWithFrame:NSMakeRect(0, 0, kSwitchWidth, kSwitchHeight)];
+    if (self) {
+        self.buttonType = NSButtonTypeToggle;
+        self.bordered = NO;
+        self.title = @"";
+        self.imagePosition = NSNoImage;
+        self.focusRingType = NSFocusRingTypeNone;
+    }
+    return self;
+}
+
+- (void)setState:(NSControlStateValue)state {
+    [super setState:state];
+    self.needsDisplay = YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    (void)event;
+    self.state = (self.state == NSControlStateValueOn)
+        ? NSControlStateValueOff
+        : NSControlStateValueOn;
+    [NSApp sendAction:self.action to:self.target from:self];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    BOOL on = (self.state == NSControlStateValueOn);
+    NSRect bounds = NSInsetRect(self.bounds, 1, 1);
+    NSColor *trackColor = on ? NSColor.controlAccentColor : NSColor.tertiaryLabelColor;
+    [trackColor setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:bounds
+                                     xRadius:NSHeight(bounds) / 2
+                                     yRadius:NSHeight(bounds) / 2] fill];
+
+    CGFloat knobSize = NSHeight(bounds) - 4;
+    CGFloat knobX = on ? NSMaxX(bounds) - knobSize - 2 : NSMinX(bounds) + 2;
+    NSRect knob = NSMakeRect(knobX, NSMinY(bounds) + 2, knobSize, knobSize);
+    [NSColor.controlBackgroundColor setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:knob] fill];
+}
+
+@end
 
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
 @property (nonatomic) BOOL notificationAuthRequested;
 @property (nonatomic) NSInteger smartRecoveryToken;
+@property (nonatomic) dispatch_source_t safetyWatchdog;
+@property (nonatomic) NSTimeInterval suppressAutoDisableUntil;
 @end
 
 @implementation AppDelegate
@@ -61,6 +116,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
 
     [self setupStatusItem];
+    [self rememberBuiltInDisplayIDIfAvailable];
     [self rebuildMenu];
 
     __weak __typeof(self) weakSelf = self;
@@ -79,20 +135,24 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
         [strongSelf.displayManager pruneStaleVirtualDisplays];
         [strongSelf.displayManager realignForcedDisplay];
         [[Brightness shared] invalidateServiceCache];
+        [strongSelf rememberBuiltInDisplayIDIfAvailable];
         [strongSelf rebuildMenu];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
         [strongSelf scheduleSmartRecoveryEvaluation];
+        [strongSelf updateSafetyWatchdog];
     }];
 
     // Reconfiguration callbacks don't fire on registration, so run once
     // now to cover the common "launched while already plugged in" case.
     [self performAutoDisableIfNeeded];
     [self scheduleSmartRecoveryEvaluation];
+    [self updateSafetyWatchdog];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
+    [self stopSafetyWatchdog];
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
 }
@@ -105,6 +165,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
         kShowResolutions:   @YES,
         kSmartRecovery:     @YES,
         kTrustedDisplays:   @[],
+        kLastBuiltInDisplayID: @0,
     }];
 }
 
@@ -180,6 +241,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     menu.autoenablesItems = NO;
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
+    displays = [self displaysIncludingKnownBuiltInFallback:displays];
 
     NSUInteger activeCount = 0;
     BOOL anyDisabled = NO;
@@ -526,13 +588,13 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
                         identifier:(nullable NSString *)identifier
                             action:(SEL)action {
     NSMenuItem *item = [[NSMenuItem alloc] init];
+    item.enabled = YES;
 
-    NSSwitch *sw = [[NSSwitch alloc] init];
-    sw.controlSize = NSControlSizeMini;
+    DDSwitchButton *sw = [[DDSwitchButton alloc] init];
     sw.translatesAutoresizingMaskIntoConstraints = YES;
-    [sw sizeToFit];
-    CGFloat switchWidth  = sw.frame.size.width;
-    CGFloat switchHeight = sw.frame.size.height;
+    sw.enabled = YES;
+    CGFloat switchWidth  = kSwitchWidth;
+    CGFloat switchHeight = kSwitchHeight;
 
     CGFloat labelWidth = kSwitchRowWidth - (kSwitchRowPad * 2) - switchWidth - kSwitchLabelGap;
     NSFont *font = [NSFont menuFontOfSize:13];
@@ -555,6 +617,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     sw.action = action;
     sw.identifier = identifier;
     sw.accessibilityLabel = title;
+    [self applySwitchAppearance:sw];
     [row addSubview:sw];
 
     // `labelWithString:` returns a label with auto-layout enabled, which
@@ -574,6 +637,10 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
     item.view = row;
     return item;
+}
+
+- (void)applySwitchAppearance:(NSButton *)sw {
+    sw.needsDisplay = YES;
 }
 
 // ── Modes submenu ───────────────────────────────────────────────────────────
@@ -747,6 +814,57 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
         if (d.displayID == displayID) return d;
     }
     return nil;
+}
+
+- (NSArray<DDDisplayInfo *> *)displaysIncludingKnownBuiltInFallback:(NSArray<DDDisplayInfo *> *)displays {
+    BOOL hasBuiltIn = NO;
+    for (DDDisplayInfo *d in displays) {
+        if (d.isBuiltIn) {
+            hasBuiltIn = YES;
+            break;
+        }
+    }
+    if (hasBuiltIn) return displays;
+
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    if (builtInID == 0) return displays;
+
+    DDDisplayInfo *fallback = [[DDDisplayInfo alloc] init];
+    fallback.displayID = builtInID;
+    fallback.name = [self.displayManager nameForDisplayID:builtInID];
+    fallback.isBuiltIn = YES;
+    fallback.isActive = NO;
+    fallback.isMain = NO;
+
+    NSMutableArray<DDDisplayInfo *> *withFallback = [displays mutableCopy];
+    [withFallback insertObject:fallback atIndex:0];
+    return withFallback;
+}
+
+- (void)rememberBuiltInDisplayIDIfAvailable {
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    if (!builtIn) return;
+    [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                              forKey:kLastBuiltInDisplayID];
+}
+
+- (CGDirectDisplayID)knownBuiltInDisplayID {
+    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
+    if (builtIn) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                                  forKey:kLastBuiltInDisplayID];
+        return builtIn.displayID;
+    }
+
+    NSNumber *cached = [[NSUserDefaults standardUserDefaults] objectForKey:kLastBuiltInDisplayID];
+    return cached.unsignedIntValue;
+}
+
+- (BOOL)isDisplayActive:(CGDirectDisplayID)displayID {
+    for (DDDisplayInfo *d in [self.displayManager allDisplays]) {
+        if (d.displayID == displayID) return d.isActive;
+    }
+    return NO;
 }
 
 - (BOOL)isSuspiciousExternalName:(NSString *)name {
@@ -991,9 +1109,14 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
     NSError *error = nil;
     if ([self.displayManager disableDisplay:did error:&error]) {
+        if (target.isBuiltIn) {
+            [[NSUserDefaults standardUserDefaults] setObject:@(did)
+                                                      forKey:kLastBuiltInDisplayID];
+        }
         [self postNotification:@"Display Disabled"
                           body:[NSString stringWithFormat:@"%@ has been disabled.", name]];
         [self scheduleSmartRecoveryEvaluation];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Failed to disable 0x%X: %@", did, error);
         [self postNotification:@"Disable Failed"
@@ -1004,11 +1127,19 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 - (void)enableDisplay:(NSMenuItem *)sender {
     CGDirectDisplayID did = [sender.representedObject unsignedIntValue];
     NSString *name = [self.displayManager nameForDisplayID:did];
+    BOOL enablingBuiltIn = (did == [self knownBuiltInDisplayID]);
+
+    if (enablingBuiltIn) {
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kAutoManage];
+        self.suppressAutoDisableUntil = CFAbsoluteTimeGetCurrent() + 8.0;
+    }
+
     NSError *error = nil;
     if ([self.displayManager enableDisplay:did error:&error]) {
         [self postNotification:@"Display Enabled"
                           body:[NSString stringWithFormat:@"%@ has been enabled.", name]];
         [self rebuildMenu];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
@@ -1423,9 +1554,11 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
 // ── Settings actions ────────────────────────────────────────────────────────
 
-- (void)switchToggled:(NSSwitch *)sender {
+- (void)switchToggled:(NSButton *)sender {
     NSString *key = sender.identifier;
     [self flipPref:key];
+    sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
+    [self applySwitchAppearance:sender];
 
     if ([key isEqualToString:kAutoManage] && [self pref:kAutoManage]) {
         [self performAutoDisableIfNeeded];
@@ -1435,7 +1568,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
     }
 }
 
-- (void)loginSwitchToggled:(NSSwitch *)sender {
+- (void)loginSwitchToggled:(NSButton *)sender {
     SMAppService *service = [SMAppService mainAppService];
     NSError *error = nil;
 
@@ -1454,6 +1587,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
     sender.state = (service.status == SMAppServiceStatusEnabled)
                    ? NSControlStateValueOn : NSControlStateValueOff;
+    [self applySwitchAppearance:sender];
 }
 
 - (void)toggleCheckSetting:(NSMenuItem *)sender {
@@ -1495,19 +1629,29 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
 - (void)evaluateSmartRecovery {
     if (![self pref:kSmartRecovery]) return;
+    [self recoverBuiltInDisplayIfUnsafeWithTitle:@"Built-in Display Recovered"
+                                            body:@"No trusted external monitor is active."
+                                  logFailureName:@"Smart recovery"];
+}
 
-    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
-    if (!builtIn || builtIn.isActive) return;
+- (void)recoverBuiltInDisplayIfUnsafeWithTitle:(NSString *)title
+                                          body:(NSString *)body
+                                logFailureName:(NSString *)logFailureName {
     if ([self hasTrustedActiveExternalDisplay]) return;
 
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    if (builtInID == 0) return;
+    if ([self isDisplayActive:builtInID]) return;
+
     NSError *error = nil;
-    if ([self.displayManager enableDisplay:builtIn.displayID error:&error]) {
-        [self postNotification:@"Built-in Display Recovered"
-                          body:@"No trusted external monitor is active."
+    if ([self.displayManager enableDisplay:builtInID error:&error]) {
+        [self postNotification:title
+                          body:body
                     identifier:kAutoManageNotifID];
         [self rebuildMenu];
+        [self updateSafetyWatchdog];
     } else {
-        NSLog(@"DisplayDisabler: Smart recovery failed: %@", error);
+        NSLog(@"DisplayDisabler: %@ failed: %@", logFailureName, error);
         [self postNotification:@"Recovery Failed"
                           body:error.localizedDescription];
     }
@@ -1515,6 +1659,7 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
 - (void)performAutoDisableIfNeeded {
     if (![self pref:kAutoManage]) return;
+    if (CFAbsoluteTimeGetCurrent() < self.suppressAutoDisableUntil) return;
 
     DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
     if (!builtIn || !builtIn.isActive) return;
@@ -1522,9 +1667,12 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 
     NSError *error = nil;
     if ([self.displayManager disableDisplay:builtIn.displayID error:&error]) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(builtIn.displayID)
+                                                  forKey:kLastBuiltInDisplayID];
         [self postNotification:@"Built-in Display Disabled"
                           body:@"External monitor detected."
                     identifier:kAutoManageNotifID];
+        [self updateSafetyWatchdog];
     } else {
         NSLog(@"DisplayDisabler: Auto-disable failed: %@", error);
     }
@@ -1533,19 +1681,54 @@ static const NSTimeInterval kSmartRecoveryDelay = 1.25;
 - (void)performAutoReenableIfNeeded {
     if (![self pref:kAutoManage]) return;
 
-    DDDisplayInfo *builtIn = [self.displayManager builtInDisplay];
-    if (!builtIn) return;
-    if (builtIn.isActive) return;
-    if ([self hasTrustedActiveExternalDisplay]) return;
+    [self recoverBuiltInDisplayIfUnsafeWithTitle:@"Built-in Display Re-enabled"
+                                            body:@"No external monitor detected."
+                                  logFailureName:@"Auto-reenable"];
+}
 
-    NSError *error = nil;
-    if ([self.displayManager enableDisplay:builtIn.displayID error:&error]) {
-        [self postNotification:@"Built-in Display Re-enabled"
-                          body:@"No external monitor detected."
-                    identifier:kAutoManageNotifID];
-    } else {
-        NSLog(@"DisplayDisabler: Auto-reenable failed: %@", error);
+- (BOOL)builtInDisplayNeedsSafetyWatchdog {
+    CGDirectDisplayID builtInID = [self knownBuiltInDisplayID];
+    return (builtInID != 0 && ![self isDisplayActive:builtInID]);
+}
+
+- (void)updateSafetyWatchdog {
+    if (![self builtInDisplayNeedsSafetyWatchdog]) {
+        [self stopSafetyWatchdog];
+        return;
     }
+
+    if (self.safetyWatchdog) return;
+
+    dispatch_source_t timer =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer,
+                              dispatch_time(DISPATCH_TIME_NOW,
+                                            (int64_t)(kSafetyWatchdogInterval * NSEC_PER_SEC)),
+                              (uint64_t)(kSafetyWatchdogInterval * NSEC_PER_SEC),
+                              (uint64_t)(0.25 * NSEC_PER_SEC));
+
+    __weak __typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(timer, ^{
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (![strongSelf builtInDisplayNeedsSafetyWatchdog]) {
+            [strongSelf stopSafetyWatchdog];
+            return;
+        }
+
+        [strongSelf evaluateSmartRecovery];
+        [strongSelf performAutoReenableIfNeeded];
+    });
+
+    self.safetyWatchdog = timer;
+    dispatch_resume(timer);
+}
+
+- (void)stopSafetyWatchdog {
+    if (!self.safetyWatchdog) return;
+    dispatch_source_cancel(self.safetyWatchdog);
+    self.safetyWatchdog = nil;
 }
 
 @end

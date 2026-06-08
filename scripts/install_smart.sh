@@ -290,6 +290,7 @@ write_watchdog_config() {
   local enable_logging="$4"
   local debug_logging="$5"
   local max_log_size_kb="$6"
+  local install_profile="$7"
 
   if [ "$DRY_RUN" = "1" ]; then
     echo "[dry-run] Would write watchdog config: $CONFIG_FILE"
@@ -312,6 +313,7 @@ write_watchdog_config() {
 # MAX_LOG_SIZE_KB rotates the log when it reaches this size. One backup is kept as .1.
 
 BUILTIN_ID="$builtin_id"
+DD_INSTALL_PROFILE="$install_profile"
 TRUSTED_EXTERNAL_NAMES="$trusted_external_names"
 SUSPICIOUS_DISPLAY_NAMES="Display|Unknown Display"
 CHECK_CONFIRMATIONS="$confirmations"
@@ -593,7 +595,7 @@ else
   MAX_LOG_SIZE_KB="1024"
 fi
 
-write_watchdog_config "$BUILTIN_ID" "$TRUSTED_EXTERNAL_NAMES" "$CHECK_CONFIRMATIONS" "$ENABLE_LOGGING_VALUE" "$DEBUG_LOGGING_VALUE" "$MAX_LOG_SIZE_KB"
+write_watchdog_config "$BUILTIN_ID" "$TRUSTED_EXTERNAL_NAMES" "$CHECK_CONFIRMATIONS" "$ENABLE_LOGGING_VALUE" "$DEBUG_LOGGING_VALUE" "$MAX_LOG_SIZE_KB" "$INSTALL_PROFILE"
 install_helpers
 write_alias_block "$OFF_ALIAS" "$ON_ALIAS" "$TRUST_ALIAS" "$STATUS_ALIAS"
 
