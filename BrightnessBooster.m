@@ -3,9 +3,14 @@
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 
+static NSScreen *screenForDisplay(CGDirectDisplayID did);
+
+static const float kHeadroomProbeStep = 0.1f;
+
 @interface DDBoost : NSObject
 @property (nonatomic) CGDirectDisplayID displayID;
 @property (nonatomic) float boost;
+@property (nonatomic) float presented;
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) CAMetalLayer *layer;
 @property (nonatomic, strong) id<MTLCommandQueue> queue;
@@ -18,10 +23,17 @@
     @autoreleasepool {
         id<CAMetalDrawable> drawable = [self.layer nextDrawable];
         if (!drawable) return;
+
+        NSScreen *s = screenForDisplay(self.displayID);
+        float headroom = s ? (float)s.maximumExtendedDynamicRangeColorComponentValue : 1.0f;
+        float eff = MIN(self.boost, headroom + kHeadroomProbeStep);
+        if (eff < 1.0f) eff = 1.0f;
+        self.presented = eff;
+
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
         rp.colorAttachments[0].texture = drawable.texture;
         rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-        rp.colorAttachments[0].clearColor = MTLClearColorMake(self.boost, self.boost, self.boost, 1.0);
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(eff, eff, eff, 1.0);
         rp.colorAttachments[0].storeAction = MTLStoreActionStore;
         id<MTLCommandBuffer> cb = [self.queue commandBuffer];
         id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
@@ -138,6 +150,7 @@ static NSScreen *screenForDisplay(CGDirectDisplayID did) {
     ml.opaque = NO;
     ml.compositingFilter = @"multiplyBlendMode";
     ml.frame = v.bounds;
+    ml.contentsScale = screen.backingScaleFactor;
     ml.drawableSize = CGSizeMake(screen.frame.size.width  * screen.backingScaleFactor,
                                  screen.frame.size.height * screen.backingScaleFactor);
     v.layer = ml;

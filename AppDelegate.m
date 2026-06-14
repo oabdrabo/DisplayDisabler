@@ -521,9 +521,13 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 }
 
 - (void)brightnessSliderChanged:(NSSlider *)sender {
+    double val = sender.doubleValue;
+    if (fabs(val - 1.0) < 0.04) {
+        val = 1.0;
+        sender.doubleValue = 1.0;
+    }
     [self syncSliderLabel:sender];
     CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
-    double val = sender.doubleValue;
     NSError *error = nil;
     if (val <= 1.0) {
         [[BrightnessBooster shared] setBoost:1.0f forDisplay:did];
