@@ -9,7 +9,7 @@ FRAMEWORKS = -framework Cocoa -framework CoreGraphics -framework IOKit \
              -framework ServiceManagement -framework UserNotifications \
              -framework CoreDisplay -framework Metal -framework QuartzCore
 SOURCES    = main.m AppDelegate.m DisplayManager.m Brightness.m HiDPIInjector.m \
-             WindowTransparency.m BrightnessBooster.m
+             WindowTransparency.m BrightnessBooster.m Caffeine.m
 OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)

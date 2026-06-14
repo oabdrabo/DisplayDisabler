@@ -4,6 +4,7 @@
 #import "HiDPIInjector.h"
 #import "WindowTransparency.h"
 #import "BrightnessBooster.h"
+#import "Caffeine.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <objc/runtime.h>
@@ -23,7 +24,7 @@ static const CGFloat kSwitchLabelGap   = 8;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
-static const CGFloat kSliderRowWidth = 232;
+static const CGFloat kSliderRowWidth = 150;
 static const NSInteger kSliderItemTag = 0x51D5;
 static const void *kDDPctLabelKey = &kDDPctLabelKey;
 
@@ -41,6 +42,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
+@property (nonatomic, strong) NSMenu *mainMenu;
 @property (nonatomic, strong) DisplayManager *displayManager;
 @property (nonatomic) BOOL notificationAuthRequested;
 @end
@@ -135,41 +137,58 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (void)setupStatusItems {
     self.statusItem = [[NSStatusBar systemStatusBar]
                        statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.toolTip = @"DisplayDisabler";
-    [self updateStatusIcon:NO];
+    self.statusItem.button.toolTip =
+        @"DisplayDisabler — click to keep awake, right-click for the menu";
 
-    NSMenu *menu = [[NSMenu alloc] init];
-    menu.autoenablesItems = NO;
-    menu.delegate = self;
-    self.statusItem.menu = menu;
+    // The menu is not attached directly so a left-click can toggle keep-awake;
+    // it's shown on right/control-click instead.
+    self.mainMenu = [[NSMenu alloc] init];
+    self.mainMenu.autoenablesItems = NO;
+    self.mainMenu.delegate = self;
+
+    self.statusItem.button.target = self;
+    self.statusItem.button.action = @selector(statusItemClicked:);
+    [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
+
+    __weak __typeof(self) weakSelf = self;
+    [Caffeine shared].onChange = ^{ [weakSelf updateStatusIcon]; };
+    [self updateStatusIcon];
 }
 
-- (void)updateStatusIcon:(BOOL)hasDisabledDisplay {
-    NSString *symbolName = hasDisabledDisplay
-        ? @"display.trianglebadge.exclamationmark"
-        : @"display";
-
+- (void)updateStatusIcon {
+    BOOL awake = [Caffeine shared].active;
+    NSString *symbolName = awake ? @"cup.and.saucer.fill" : @"cup.and.saucer";
     NSImage *icon = [NSImage imageWithSystemSymbolName:symbolName
                                accessibilityDescription:@"DisplayDisabler"];
     [icon setTemplate:YES];
     self.statusItem.button.image = icon;
 }
 
+- (void)statusItemClicked:(id)sender {
+    (void)sender;
+    NSEvent *e = NSApp.currentEvent;
+    BOOL menuClick = (e.type == NSEventTypeRightMouseUp) ||
+                     (e.type == NSEventTypeLeftMouseUp &&
+                      (e.modifierFlags & NSEventModifierFlagControl));
+    if (menuClick) {
+        self.statusItem.menu = self.mainMenu;
+        [self.statusItem.button performClick:nil];
+        self.statusItem.menu = nil;
+    } else {
+        [[Caffeine shared] toggle];
+    }
+}
+
 - (void)rebuildMenu {
-    [self populateMainMenu:self.statusItem.menu];
+    [self populateMainMenu:self.mainMenu];
 }
 
 - (void)populateMainMenu:(NSMenu *)menu {
     [menu removeAllItems];
 
-    NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
-    BOOL anyDisabled = NO;
-    for (DDDisplayInfo *d in displays) {
-        if (!d.isActive && ![self.displayManager isHiDPIForcedForDisplay:d.displayID])
-            anyDisabled = YES;
-    }
-    [self updateStatusIcon:anyDisabled];
+    [self addKeepAwakeSectionToMenu:menu];
 
+    NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
     for (DDDisplayInfo *display in displays) {
         [self addDisplaySectionToMenu:menu display:display];
     }
@@ -196,6 +215,53 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     [self sizeSliderRowsInMenu:menu];
 }
 
+- (void)addKeepAwakeSectionToMenu:(NSMenu *)menu {
+    Caffeine *caf = [Caffeine shared];
+
+    NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:@"Keep Awake"
+        action:@selector(toggleKeepAwake:) keyEquivalent:@""];
+    toggle.target = self;
+    toggle.state = caf.active ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:toggle];
+
+    if (caf.active && caf.expiry) {
+        NSDateFormatter *df = [[NSDateFormatter alloc] init];
+        df.timeStyle = NSDateFormatterShortStyle;
+        df.dateStyle = NSDateFormatterNoStyle;
+        [self addLabelToMenu:menu title:
+            [NSString stringWithFormat:@"    until %@", [df stringFromDate:caf.expiry]]];
+    }
+
+    NSMenuItem *forItem = [[NSMenuItem alloc] initWithTitle:@"Keep Awake for"
+        action:nil keyEquivalent:@""];
+    NSMenu *durMenu = [[NSMenu alloc] init];
+    durMenu.autoenablesItems = NO;
+    NSArray *durations = @[ @[@"15 minutes", @900], @[@"30 minutes", @1800],
+                            @[@"1 hour", @3600], @[@"2 hours", @7200], @[@"5 hours", @18000] ];
+    for (NSArray *d in durations) {
+        NSMenuItem *di = [[NSMenuItem alloc] initWithTitle:d[0]
+            action:@selector(keepAwakeFor:) keyEquivalent:@""];
+        di.target = self;
+        di.representedObject = d[1];
+        [durMenu addItem:di];
+    }
+    forItem.submenu = durMenu;
+    [menu addItem:forItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+}
+
+- (void)toggleKeepAwake:(NSMenuItem *)sender {
+    (void)sender;
+    [[Caffeine shared] toggle];
+    [self rebuildMenu];
+}
+
+- (void)keepAwakeFor:(NSMenuItem *)sender {
+    [[Caffeine shared] activateForDuration:[sender.representedObject doubleValue]];
+    [self rebuildMenu];
+}
+
 - (NSMenuItem *)actionItem:(NSString *)title action:(SEL)action displayID:(CGDirectDisplayID)did {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
     item.target = self;
@@ -206,7 +272,11 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (void)addDisplaySectionToMenu:(NSMenu *)menu display:(DDDisplayInfo *)display {
     BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
 
-    NSString *suffix = forced ? @"  \u00B7  HiDPI" : (display.isActive ? @"" : @"  \u00B7  off");
+    NSString *suffix;
+    if (forced)                 suffix = @"  \u00B7  HiDPI forced";
+    else if (!display.isActive) suffix = @"  \u00B7  off";
+    else if (display.isHiDPI)   suffix = @"  \u00B7  HiDPI";
+    else                        suffix = @"";
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:
         [display.name stringByAppendingString:suffix]]];
 
@@ -246,10 +316,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         size_t lw = display.logicalWidth ?: display.pixelWidth;
         size_t lh = display.logicalHeight ?: display.pixelHeight;
         NSMutableString *rt = [NSMutableString stringWithString:@"Resolution"];
-        if (lw) {
-            [rt appendFormat:@"   %@", ddLogicalString(lw, lh)];
-            if (display.isHiDPI) [rt appendString:@"  HiDPI"];
-        }
+        if (lw) [rt appendFormat:@"   %@", ddLogicalString(lw, lh)];
         NSMenuItem *res = [[NSMenuItem alloc] initWithTitle:rt action:nil keyEquivalent:@""];
         res.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
         [menu addItem:res];
@@ -493,7 +560,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
-    if (menu == self.statusItem.menu) {
+    if (menu == self.mainMenu) {
         [self populateMainMenu:menu];
         return;
     }
