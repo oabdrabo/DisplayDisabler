@@ -14,6 +14,7 @@ static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
 static NSString * const kFrostedBlur        = @"FrostedBlur";
+static NSString * const kDidSetupLogin      = @"DidSetupLoginItem";
 
 static NSString * const kAutoManageNotifID = @"auto-manage";
 
@@ -72,6 +73,8 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
     [self registerDefaults];
 
     self.displayManager = [DisplayManager shared];
+
+    [self enableLoginItemOnFirstRun];
 
     [WindowTransparency shared].frostedBlur = [self pref:kFrostedBlur];
     [[WindowTransparency shared] ensureBackendLoaded];
@@ -969,6 +972,20 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
     NSDictionary *asErr = nil;
     [as executeAndReturnError:&asErr];
     if (asErr) NSLog(@"DisplayDisabler: restart script error: %@", asErr);
+}
+
+- (void)enableLoginItemOnFirstRun {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults boolForKey:kDidSetupLogin]) return;
+    [defaults setBool:YES forKey:kDidSetupLogin];
+
+    SMAppService *service = [SMAppService mainAppService];
+    if (service.status != SMAppServiceStatusEnabled) {
+        NSError *error = nil;
+        if (![service registerAndReturnError:&error]) {
+            NSLog(@"DisplayDisabler: default login-item registration failed: %@", error);
+        }
+    }
 }
 
 - (void)toggleLoginItem:(NSMenuItem *)sender {
