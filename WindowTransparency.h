@@ -18,6 +18,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
+@property (nonatomic) BOOL frostedBlur;
+
 - (BOOL)backendAvailable;
 - (void)ensureBackendLoaded;
 
@@ -26,6 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)setAlpha:(float)alpha forApp:(pid_t)pid error:(NSError **)error;
 - (BOOL)setAlphaForAllWindows:(float)alpha error:(NSError **)error;
 - (BOOL)resetAllWindows:(NSError **)error;
+- (void)reapplyBlurForAllWindows;
 
 @end
 

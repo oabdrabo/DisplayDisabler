@@ -13,6 +13,7 @@ static NSString * const kAutoManage        = @"AutoManageBuiltIn";
 static NSString * const kShowNotifications = @"ShowNotifications";
 static NSString * const kConfirmDisable    = @"ConfirmBeforeDisable";
 static NSString * const kShowResolutions   = @"ShowResolutions";
+static NSString * const kFrostedBlur        = @"FrostedBlur";
 
 static NSString * const kAutoManageNotifID = @"auto-manage";
 
@@ -55,6 +56,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 
     self.displayManager = [DisplayManager shared];
 
+    [WindowTransparency shared].frostedBlur = [self pref:kFrostedBlur];
     [[WindowTransparency shared] ensureBackendLoaded];
 
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
@@ -90,6 +92,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         kShowNotifications: @YES,
         kConfirmDisable:    @YES,
         kShowResolutions:   @YES,
+        kFrostedBlur:       @YES,
     }];
 }
 
@@ -569,6 +572,8 @@ static NSString *ddLogicalString(size_t w, size_t h) {
                                        key:kConfirmDisable]];
     [menu addItem:[self checkItemWithTitle:@"Show all resolutions"
                                        key:kShowResolutions]];
+    [menu addItem:[self checkItemWithTitle:@"Frosted glass (blur behind transparent windows)"
+                                       key:kFrostedBlur]];
     [menu addItem:[NSMenuItem separatorItem]];
 
     BOOL loginEnabled = (SMAppService.mainAppService.status == SMAppServiceStatusEnabled);
@@ -950,6 +955,10 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     [self flipPref:key];
     sender.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
     if ([key isEqualToString:kShowResolutions]) [self rebuildMenu];
+    if ([key isEqualToString:kFrostedBlur]) {
+        [WindowTransparency shared].frostedBlur = [self pref:kFrostedBlur];
+        [[WindowTransparency shared] reapplyBlurForAllWindows];
+    }
 }
 
 - (BOOL)confirmDestructive:(NSString *)message

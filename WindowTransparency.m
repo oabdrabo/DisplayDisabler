@@ -9,6 +9,8 @@
 static NSErrorDomain const kTransparencyErrorDomain = @"com.local.DisplayDisabler.Transparency";
 
 static const uint8_t kSAOpcodeWindowOpacity = 0x07;
+static const uint8_t kSAOpcodeWindowBlur    = 0x08;
+static const int kMaxBlurRadius = 28;
 
 @implementation DDWindow
 @end
@@ -158,7 +160,8 @@ static NSString *shellQuote(NSString *s) {
     return order;
 }
 
-- (BOOL)applyAlpha:(float)alpha toWindowID:(uint32_t)windowID error:(NSError **)error {
+- (BOOL)sendOpcode:(uint8_t)opcode payload:(const void *)payload length:(size_t)payloadLen
+             error:(NSError **)error {
     int fd = [self connectedSocketFD];
     if (fd < 0) {
         if (error) *error = DDError(kTransparencyErrorDomain, 1,
@@ -168,12 +171,9 @@ static NSString *shellQuote(NSString *s) {
 
     char bytes[0x1000];
     int16_t length = 1 + (int16_t)sizeof(int16_t);
-    float duration = 0.0f;
-    memcpy(bytes + length, &windowID, sizeof windowID); length += sizeof windowID;
-    memcpy(bytes + length, &alpha,    sizeof alpha);    length += sizeof alpha;
-    memcpy(bytes + length, &duration, sizeof duration); length += sizeof duration;
+    bytes[sizeof(int16_t)] = (char)opcode;
+    memcpy(bytes + length, payload, payloadLen); length += payloadLen;
     *(int16_t *)bytes = length - (int16_t)sizeof(int16_t);
-    bytes[sizeof(int16_t)] = (char)kSAOpcodeWindowOpacity;
 
     ssize_t sent = send(fd, bytes, length, 0);
     close(fd);
@@ -182,6 +182,16 @@ static NSString *shellQuote(NSString *s) {
         return NO;
     }
     return YES;
+}
+
+- (BOOL)applyAlpha:(float)alpha toWindowID:(uint32_t)windowID error:(NSError **)error {
+    struct { uint32_t wid; float alpha; float duration; } p = { windowID, alpha, 0.0f };
+    return [self sendOpcode:kSAOpcodeWindowOpacity payload:&p length:sizeof p error:error];
+}
+
+- (BOOL)applyBlur:(int)radius toWindowID:(uint32_t)windowID error:(NSError **)error {
+    struct { uint32_t wid; int radius; } p = { windowID, radius };
+    return [self sendOpcode:kSAOpcodeWindowBlur payload:&p length:sizeof p error:error];
 }
 
 - (BOOL)applyAlpha:(float)alpha toWindowsMatching:(BOOL (^)(DDAppWindows *app))match
@@ -196,6 +206,10 @@ static NSString *shellQuote(NSString *s) {
             if (![self applyAlpha:alpha toWindowID:w.windowID error:&e]) {
                 all = NO;
                 if (!first) first = e;
+            }
+            if (self.frostedBlur) {
+                int radius = (int)lroundf((1.0f - alpha) * kMaxBlurRadius);
+                [self applyBlur:radius toWindowID:w.windowID error:NULL];
             }
         }
     }
@@ -215,6 +229,17 @@ static NSString *shellQuote(NSString *s) {
 
 - (BOOL)resetAllWindows:(NSError **)error {
     return [self setAlphaForAllWindows:1.0f error:error];
+}
+
+- (void)reapplyBlurForAllWindows {
+    [self reloadSilently];
+    for (DDAppWindows *app in [self appsWithWindows]) {
+        for (DDWindow *w in app.windows) {
+            int radius = self.frostedBlur
+                ? (int)lroundf((1.0f - w.alpha) * kMaxBlurRadius) : 0;
+            [self applyBlur:radius toWindowID:w.windowID error:NULL];
+        }
+    }
 }
 
 @end
