@@ -29,6 +29,21 @@ make install      # builds, signs (ad-hoc), and copies to /Applications
 
 Requires Xcode Command Line Tools (`xcode-select --install`). Use the menu-bar icon → **Settings → Launch at Login** to start it automatically.
 
+## Project layout
+
+```
+src/
+  main.m              app entry point
+  app/                AppDelegate — status item, menu, UI
+  display/            DisplayManager, HiDPIInjector, Brightness, BrightnessBooster
+  transparency/       WindowTransparency — in-app client for the Dock payload
+  power/              Caffeine — keep-awake power assertion
+  common/             DDUtil — shared error/AppleScript helpers
+sa/                   scripting addition injected into Dock (loader.m, payload.m)
+tools/                build_icon.m — generates AppIcon.icns
+resources/            Info.plist
+```
+
 ## How it works
 
 - Disabling uses the private `CGSConfigureDisplayEnabled`; Force HiDPI mirrors the panel onto a private `SLVirtualDisplay` pinned to the desired logical size.

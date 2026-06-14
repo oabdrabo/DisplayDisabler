@@ -16,5 +16,3 @@ AppIcon.iconset/
 .idea/
 *.xcodeproj/
 .claude/
-/*.plist
-!/Info.plist
