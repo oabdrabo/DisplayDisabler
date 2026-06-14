@@ -1,9 +1,8 @@
-
-
 #import "AppDelegate.h"
 #import "DisplayManager.h"
 #import "Brightness.h"
 #import "HiDPIInjector.h"
+#import "WindowTransparency.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 
@@ -22,6 +21,20 @@ static const CGFloat kSwitchLabelGap   = 8;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
+static const int kTransparencyLevels[] = {100, 90, 75, 50, 25};
+
+static NSString *ddPad(NSString *s, NSUInteger length) {
+    return [s stringByPaddingToLength:length withString:@" " startingAtIndex:0];
+}
+
+static NSString *ddRateString(double hz, NSString *fallback) {
+    return hz > 0 ? [NSString stringWithFormat:@"%.0fHz", hz] : fallback;
+}
+
+static NSString *ddLogicalString(size_t w, size_t h) {
+    return [NSString stringWithFormat:@"%zu \u00D7 %zu", w, h];
+}
+
 @interface AppDelegate () <UNUserNotificationCenterDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) DisplayManager *displayManager;
@@ -36,9 +49,11 @@ static const NSUInteger kModeColType    = 10;
 
     self.displayManager = [DisplayManager shared];
 
+    [[WindowTransparency shared] ensureBackendLoaded];
+
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
 
-    [self setupStatusItem];
+    [self setupStatusItems];
     [self rebuildMenu];
 
     __weak __typeof(self) weakSelf = self;
@@ -112,11 +127,11 @@ static const NSUInteger kModeColType    = 10;
     }];
 }
 
-- (void)setupStatusItem {
+- (void)setupStatusItems {
     self.statusItem = [[NSStatusBar systemStatusBar]
                        statusItemWithLength:NSVariableStatusItemLength];
-    [self updateStatusIcon:NO];
     self.statusItem.button.toolTip = @"DisplayDisabler";
+    [self updateStatusIcon:NO];
 }
 
 - (void)updateStatusIcon:(BOOL)hasDisabledDisplay {
@@ -135,7 +150,6 @@ static const NSUInteger kModeColType    = 10;
     menu.autoenablesItems = NO;
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
-
     NSUInteger activeCount = 0;
     BOOL anyDisabled = NO;
     for (DDDisplayInfo *d in displays) {
@@ -144,19 +158,29 @@ static const NSUInteger kModeColType    = 10;
         if (effectivelyActive) activeCount++;
         else                   anyDisabled = YES;
     }
-
     [self updateStatusIcon:anyDisabled];
 
-    [self addLabelToMenu:menu title:
-        [NSString stringWithFormat:@"%lu connected, %lu active",
-         (unsigned long)displays.count, (unsigned long)activeCount]];
+    NSMenu *displaysSub = [[NSMenu alloc] init];
+    displaysSub.autoenablesItems = NO;
+    for (DDDisplayInfo *display in displays) {
+        [self addDisplayRow:display toMenu:displaysSub];
+    }
+    NSMenuItem *displaysItem = [[NSMenuItem alloc]
+        initWithTitle:[NSString stringWithFormat:@"Displays  (%lu of %lu active)",
+                       (unsigned long)activeCount, (unsigned long)displays.count]
+               action:nil keyEquivalent:@""];
+    displaysItem.submenu = displaysSub;
+    [menu addItem:displaysItem];
+
+    NSMenu *transparencySub = [[NSMenu alloc] init];
+    transparencySub.autoenablesItems = NO;
+    [self addTransparencySectionToMenu:transparencySub];
+    NSMenuItem *transparencyItem = [[NSMenuItem alloc]
+        initWithTitle:@"Transparency" action:nil keyEquivalent:@""];
+    transparencyItem.submenu = transparencySub;
+    [menu addItem:transparencyItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
-
-    for (DDDisplayInfo *display in displays) {
-        [self addDisplaySection:display toMenu:menu];
-        [menu addItem:[NSMenuItem separatorItem]];
-    }
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
@@ -167,117 +191,96 @@ static const NSUInteger kModeColType    = 10;
     [menu addItem:settingsItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *quit = [[NSMenuItem alloc]
-        initWithTitle:@"Quit"
-               action:@selector(terminate:)
-        keyEquivalent:@"q"];
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit"
+        action:@selector(terminate:) keyEquivalent:@"q"];
     quit.target = NSApp;
     [menu addItem:quit];
 
     self.statusItem.menu = menu;
 }
 
-- (void)addDisplaySection:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
-    [self addDisplayHeader:display forced:forced toMenu:menu];
-
-    if (forced) {
-        [self addForcedHiDPIControls:display toMenu:menu];
-    } else if (display.isActive) {
-        [self addActiveDisplayControls:display toMenu:menu];
-    } else {
-        [self addDisabledDisplayControls:display toMenu:menu];
-    }
+- (NSMenuItem *)actionItem:(NSString *)title action:(SEL)action displayID:(CGDirectDisplayID)did {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = @(did);
+    return item;
 }
 
-- (void)addDisplayHeader:(DDDisplayInfo *)display
-                  forced:(BOOL)forced
-                  toMenu:(NSMenu *)menu {
-    BOOL effectivelyActive = display.isActive || forced;
-    NSString *dot = effectivelyActive ? @"\u25CF " : @"\u25CB ";
+- (void)addDisplayRow:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
+    BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
+    NSMutableString *title = [NSMutableString stringWithFormat:@"  %@", display.name];
+    if (display.isActive && display.pixelWidth > 0) {
+        [title appendFormat:@"   %@", ddLogicalString(display.pixelWidth, display.pixelHeight)];
+    }
+    NSString *state = forced ? @"HiDPI" : (display.isActive ? @"on" : @"off");
+    [title appendFormat:@"   %@", state];
 
-    NSAttributedString *attrTitle = [[NSAttributedString alloc]
-        initWithString:[NSString stringWithFormat:@"%@%@", dot, display.name]
-            attributes:@{NSFontAttributeName: [NSFont menuBarFontOfSize:14]}];
+    NSMenuItem *row = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    row.submenu = [self displaySubmenuFor:display forced:forced];
+    [menu addItem:row];
+}
 
-    NSMenuItem *nameItem = [[NSMenuItem alloc] initWithTitle:@""
-                                                      action:nil keyEquivalent:@""];
-    nameItem.enabled = NO;
-    nameItem.attributedTitle = attrTitle;
-    [menu addItem:nameItem];
+- (NSMenu *)displaySubmenuFor:(DDDisplayInfo *)display forced:(BOOL)forced {
+    NSMenu *m = [[NSMenu alloc] init];
+    m.autoenablesItems = NO;
 
     NSMutableArray<NSString *> *tags = [NSMutableArray array];
-    if (forced)                                 [tags addObject:@"HiDPI forced"];
-    else if (!display.isActive)                 [tags addObject:@"disabled"];
-    if (display.isBuiltIn)                      [tags addObject:@"built-in"];
-    if (display.isMain)                         [tags addObject:@"main"];
-
+    if (forced)                 [tags addObject:@"HiDPI forced"];
+    else if (!display.isActive) [tags addObject:@"disabled"];
+    if (display.isBuiltIn)      [tags addObject:@"built-in"];
+    if (display.isMain)         [tags addObject:@"main"];
+    if (display.isActive && display.refreshRate > 0)
+        [tags addObject:[NSString stringWithFormat:@"%.0fHz", display.refreshRate]];
     if (tags.count > 0) {
-        [self addLabelToMenu:menu title:
-            [NSString stringWithFormat:@"    %@",
-             [tags componentsJoinedByString:@"  \u2502  "]]];
+        [self addLabelToMenu:m title:[tags componentsJoinedByString:@" \u00B7 "]];
+        [m addItem:[NSMenuItem separatorItem]];
     }
-}
 
-- (void)addForcedHiDPIControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    [self addActionToMenu:menu title:@"Stop Forced HiDPI"
-                   action:@selector(stopForcedHiDPI:) displayID:display.displayID];
-}
-
-- (void)addActiveDisplayControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    NSMutableString *resStr = [NSMutableString stringWithFormat:@"    %zu \u00D7 %zu",
-                               display.pixelWidth, display.pixelHeight];
-    if (display.isHiDPI && display.logicalWidth > 0) {
-        [resStr appendFormat:@" @%zux", display.pixelWidth / display.logicalWidth];
+    if (forced) {
+        [m addItem:[self actionItem:@"Stop Forced HiDPI"
+                             action:@selector(stopForcedHiDPI:) displayID:display.displayID]];
+        return m;
     }
-    if (display.refreshRate > 0) {
-        [resStr appendFormat:@"  %.0fHz", display.refreshRate];
+    if (!display.isActive) {
+        [m addItem:[self actionItem:@"Enable"
+                             action:@selector(enableDisplay:) displayID:display.displayID]];
+        return m;
     }
-    [self addLabelToMenu:menu title:resStr];
 
-    BOOL needAllRes = [self pref:kShowResolutions];
-    BOOL needForce  = NSClassFromString(@"CGVirtualDisplay") != nil;
-
-    if (needAllRes) {
+    if ([self pref:kShowResolutions]) {
         NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:display.displayID];
-        NSMenuItem *modesItem = [[NSMenuItem alloc]
-            initWithTitle:@"    All Resolutions" action:nil keyEquivalent:@""];
-        modesItem.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
-        [menu addItem:modesItem];
+        NSMenuItem *res = [[NSMenuItem alloc] initWithTitle:@"Resolution" action:nil keyEquivalent:@""];
+        res.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
+        [m addItem:res];
     }
-
-    if (needForce) {
+    if (NSClassFromString(@"CGVirtualDisplay") != nil) {
         NSArray<DDDisplayMode *> *options =
             [self.displayManager forceHiDPIOptionsForDisplay:display.displayID];
         if (options.count > 0) {
-            NSMenuItem *forceItem = [[NSMenuItem alloc]
-                initWithTitle:@"    Force HiDPI" action:nil keyEquivalent:@""];
-            forceItem.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID
-                                                               options:options];
-            [menu addItem:forceItem];
+            NSMenuItem *fh = [[NSMenuItem alloc] initWithTitle:@"Force HiDPI" action:nil keyEquivalent:@""];
+            fh.submenu = [self buildForceHiDPISubmenuForDisplay:display.displayID options:options];
+            [m addItem:fh];
         }
     }
-
     if ([[Brightness shared] supportsBrightness:display.displayID]) {
-        NSMenuItem *brightItem = [[NSMenuItem alloc]
-            initWithTitle:@"    Brightness" action:nil keyEquivalent:@""];
-        brightItem.submenu = [self buildBrightnessSubmenuForDisplay:display.displayID];
-        [menu addItem:brightItem];
+        int b = [[Brightness shared] brightnessPercentForDisplay:display.displayID];
+        NSString *bt = b >= 0 ? [NSString stringWithFormat:@"Brightness   %d%%", b] : @"Brightness";
+        NSMenuItem *br = [[NSMenuItem alloc] initWithTitle:bt action:nil keyEquivalent:@""];
+        br.submenu = [self buildBrightnessSubmenuForDisplay:display.displayID];
+        [m addItem:br];
     }
 
     BOOL installed = [[HiDPIInjector shared] isInstalledForDisplay:display.displayID];
-    [self addActionToMenu:menu
-                    title:(installed
-                           ? @"Remove Crisp HiDPI Overrides\u2026"
-                           : @"Install Crisp HiDPI (admin + reboot)\u2026")
-                   action:(installed
-                           ? @selector(uninstallCrispHiDPI:)
-                           : @selector(installCrispHiDPI:))
-                displayID:display.displayID];
-
-    [self addActionToMenu:menu title:@"Disable"
-                   action:@selector(disableDisplay:) displayID:display.displayID];
+    [m addItem:[self actionItem:(installed
+                                 ? @"Remove Crisp HiDPI Overrides\u2026"
+                                 : @"Install Crisp HiDPI (admin + reboot)\u2026")
+                         action:(installed ? @selector(uninstallCrispHiDPI:)
+                                           : @selector(installCrispHiDPI:))
+                      displayID:display.displayID]];
+    [m addItem:[NSMenuItem separatorItem]];
+    [m addItem:[self actionItem:@"Disable"
+                         action:@selector(disableDisplay:) displayID:display.displayID]];
+    return m;
 }
 
 - (NSMenu *)buildBrightnessSubmenuForDisplay:(CGDirectDisplayID)displayID {
@@ -322,13 +325,9 @@ static const NSUInteger kModeColType    = 10;
         BOOL isCurrent = (currentlyForced &&
                           currentlyForced.pixelWidth  == mode.pixelWidth &&
                           currentlyForced.pixelHeight == mode.pixelHeight);
-        NSString *symbolName = (mode.modeRef != NULL) ? @"bolt.fill" : @"plus.square.fill";
-        NSString *sizeCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
-                              mode.logicalWidth, mode.logicalHeight]
-                             stringByPaddingToLength:kModeColLogical
-                                          withString:@" " startingAtIndex:0];
-        NSString *rateStr = mode.refreshRate > 0
-            ? [NSString stringWithFormat:@"%.0fHz", mode.refreshRate] : @"";
+        NSString *sizeCol = ddPad(ddLogicalString(mode.logicalWidth, mode.logicalHeight),
+                                  kModeColLogical);
+        NSString *rateStr = ddRateString(mode.refreshRate, @"");
         NSString *line = [NSString stringWithFormat:@"%@%@", sizeCol, rateStr];
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:line
@@ -341,8 +340,6 @@ static const NSUInteger kModeColType    = 10;
             initWithString:line
                 attributes:@{NSFontAttributeName: isCurrent ? monoBold : mono}];
         if (isCurrent) item.state = NSControlStateValueOn;
-        item.image = [NSImage imageWithSystemSymbolName:symbolName
-                                accessibilityDescription:nil];
         return item;
     };
 
@@ -375,9 +372,89 @@ static const NSUInteger kModeColType    = 10;
     return submenu;
 }
 
-- (void)addDisabledDisplayControls:(DDDisplayInfo *)display toMenu:(NSMenu *)menu {
-    [self addActionToMenu:menu title:@"Enable"
-                   action:@selector(enableDisplay:) displayID:display.displayID];
+- (void)addTransparencySectionToMenu:(NSMenu *)menu {
+    WindowTransparency *wt = [WindowTransparency shared];
+
+    if (![wt backendAvailable]) {
+        [self addLabelToMenu:menu title:@"backend not loaded"];
+        return;
+    }
+
+    NSArray<DDAppWindows *> *apps = [wt appsWithWindows];
+    if (apps.count == 0) {
+        [self addLabelToMenu:menu title:@"no windows"];
+    }
+    for (DDAppWindows *app in apps) {
+        int pct = 100;
+        for (DDWindow *w in app.windows) {
+            int p = (int)lroundf(w.alpha * 100.0f);
+            if (p < pct) pct = p;
+        }
+        NSString *suffix = app.windows.count > 1
+            ? [NSString stringWithFormat:@"   (%lu win)", (unsigned long)app.windows.count]
+            : @"";
+        NSMenuItem *row = [[NSMenuItem alloc]
+            initWithTitle:[NSString stringWithFormat:@"%@   %d%%%@", app.name, pct, suffix]
+                   action:nil keyEquivalent:@""];
+        row.submenu = [self transparencyLevelsMenuForPID:app.pid allWindows:NO current:pct];
+        [menu addItem:row];
+    }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *all = [[NSMenuItem alloc]
+        initWithTitle:@"All windows…" action:nil keyEquivalent:@""];
+    all.submenu = [self transparencyLevelsMenuForPID:0 allWindows:YES current:-1];
+    [menu addItem:all];
+
+    NSMenuItem *reset = [[NSMenuItem alloc]
+        initWithTitle:@"Reset all (100%)"
+               action:@selector(resetAllTransparency:) keyEquivalent:@""];
+    reset.target = self;
+    [menu addItem:reset];
+}
+
+- (NSMenu *)transparencyLevelsMenuForPID:(pid_t)pid
+                              allWindows:(BOOL)allWindows
+                                 current:(int)current {
+    NSMenu *m = [[NSMenu alloc] init];
+    m.autoenablesItems = NO;
+    for (size_t i = 0; i < sizeof kTransparencyLevels / sizeof *kTransparencyLevels; i++) {
+        int pct = kTransparencyLevels[i];
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:[NSString stringWithFormat:@"%d%%", pct]
+                   action:@selector(applyTransparency:) keyEquivalent:@""];
+        item.target = self;
+        if (!allWindows && abs(pct - current) <= 2) item.state = NSControlStateValueOn;
+        item.representedObject = @{ @"pct": @(pct),
+                                    @"pid": @(pid),
+                                    @"all": @(allWindows) };
+        [m addItem:item];
+    }
+    return m;
+}
+
+- (void)applyTransparency:(NSMenuItem *)sender {
+    NSDictionary *info = sender.representedObject;
+    float alpha = [info[@"pct"] intValue] / 100.0f;
+    NSError *error = nil;
+    BOOL ok = [info[@"all"] boolValue]
+        ? [[WindowTransparency shared] setAlphaForAllWindows:alpha error:&error]
+        : [[WindowTransparency shared] setAlpha:alpha forApp:[info[@"pid"] intValue] error:&error];
+    if (!ok) {
+        NSLog(@"DisplayDisabler: transparency failed: %@", error);
+        [self postNotification:@"Transparency Failed" body:error.localizedDescription];
+    }
+    [self rebuildMenu];
+}
+
+- (void)resetAllTransparency:(NSMenuItem *)sender {
+    (void)sender;
+    NSError *error = nil;
+    if (![[WindowTransparency shared] resetAllWindows:&error]) {
+        NSLog(@"DisplayDisabler: reset transparency failed: %@", error);
+    }
+    [self rebuildMenu];
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
@@ -475,8 +552,8 @@ static const NSUInteger kModeColType    = 10;
     NSMenuItem *header = [[NSMenuItem alloc]
         initWithTitle:@"" action:nil keyEquivalent:@""];
     NSString *headerLine = [NSString stringWithFormat:@"%@%@%@",
-        [@"Looks Like" stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0],
-        [@"Type"       stringByPaddingToLength:kModeColType    withString:@" " startingAtIndex:0],
+        ddPad(@"Looks Like", kModeColLogical),
+        ddPad(@"Type", kModeColType),
         @"Rate"];
     header.attributedTitle = [[NSAttributedString alloc]
         initWithString:headerLine
@@ -487,18 +564,13 @@ static const NSUInteger kModeColType    = 10;
     [submenu addItem:[NSMenuItem separatorItem]];
 
     for (DDDisplayMode *mode in modes) {
-        NSString *rateStr = mode.refreshRate > 0
-            ? [NSString stringWithFormat:@"%.0fHz", mode.refreshRate] : @"--";
-
-        NSString *logicalCol = [[NSString stringWithFormat:@"%zu \u00D7 %zu",
-            mode.logicalWidth, mode.logicalHeight]
-            stringByPaddingToLength:kModeColLogical withString:@" " startingAtIndex:0];
-
-        NSString *typeCol = [(mode.isHiDPI ? @"HiDPI" : @"Standard")
-            stringByPaddingToLength:kModeColType withString:@" " startingAtIndex:0];
-
-        NSString *line = [NSString stringWithFormat:@"%@%@%@",
-                          logicalCol, typeCol, rateStr];
+        NSString *rateStr = ddRateString(mode.refreshRate, @"--");
+        NSString *logicalCol = ddPad(ddLogicalString(mode.logicalWidth, mode.logicalHeight),
+                                     kModeColLogical);
+        NSString *typeCol = ddPad(mode.isHiDPI ? @"HiDPI" : @"Standard", kModeColType);
+        NSString *marker = mode.isDefaultForDisplay ? @"  ★" : @"";
+        NSString *line = [NSString stringWithFormat:@"%@%@%@%@",
+                          logicalCol, typeCol, rateStr, marker];
 
         NSMenuItem *item = [[NSMenuItem alloc]
             initWithTitle:line
@@ -514,21 +586,11 @@ static const NSUInteger kModeColType    = 10;
             initWithString:line
                 attributes:@{NSFontAttributeName: mode.isCurrent ? monoBold : mono}];
         if (mode.isCurrent) item.state = NSControlStateValueOn;
-        if (mode.isDefaultForDisplay) {
-            item.image = [NSImage imageWithSystemSymbolName:@"star.fill"
-                                   accessibilityDescription:@"panel-native"];
-        }
         [submenu addItem:item];
     }
 
     [submenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *legend = [[NSMenuItem alloc]
-        initWithTitle:@"panel-native (no scaling, crispest)"
-               action:nil keyEquivalent:@""];
-    legend.enabled = NO;
-    legend.image = [NSImage imageWithSystemSymbolName:@"star.fill"
-                           accessibilityDescription:nil];
-    [submenu addItem:legend];
+    [self addLabelToMenu:submenu title:@"★ = panel-native (no scaling, crispest)"];
 
     return submenu;
 }
@@ -538,19 +600,6 @@ static const NSUInteger kModeColType    = 10;
                                                  action:nil
                                           keyEquivalent:@""];
     item.enabled = NO;
-    [menu addItem:item];
-}
-
-- (void)addActionToMenu:(NSMenu *)menu
-                  title:(NSString *)title
-                 action:(SEL)action
-              displayID:(CGDirectDisplayID)displayID {
-    NSMenuItem *item = [[NSMenuItem alloc]
-        initWithTitle:[NSString stringWithFormat:@"    %@", title]
-               action:action
-        keyEquivalent:@""];
-    item.target = self;
-    item.representedObject = @(displayID);
     [menu addItem:item];
 }
 
@@ -696,7 +745,7 @@ static const NSUInteger kModeColType    = 10;
     NSMutableString *list = [NSMutableString string];
     for (NSValue *v in presets) {
         NSSize s = v.sizeValue;
-        [list appendFormat:@"  • %d × %d\n", (int)s.width, (int)s.height];
+        [list appendFormat:@"  \u2022 %d \u00D7 %d\n", (int)s.width, (int)s.height];
     }
 
     [NSApp activate];

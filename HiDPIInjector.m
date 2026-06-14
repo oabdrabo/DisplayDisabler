@@ -1,5 +1,3 @@
-
-
 #import "HiDPIInjector.h"
 #import "DisplayManager.h"
 #import <AppKit/AppKit.h>
@@ -31,17 +29,6 @@ static NSData *entry8(NSUInteger logicalW, NSUInteger logicalH) {
     uint32_t H = htonl((uint32_t)(logicalH * 2));
     memcpy(bytes + 0, &W, 4);
     memcpy(bytes + 4, &H, 4);
-    return [NSData dataWithBytes:bytes length:sizeof bytes];
-}
-
-__unused static NSData *entry12BelowNotch(NSUInteger logicalW, NSUInteger logicalH) {
-    uint8_t bytes[12] = {0};
-    uint32_t W = htonl((uint32_t)(logicalW * 2));
-    uint32_t H = htonl((uint32_t)(logicalH * 2));
-    uint32_t F = htonl((uint32_t)1);
-    memcpy(bytes + 0,  &W, 4);
-    memcpy(bytes + 4,  &H, 4);
-    memcpy(bytes + 8,  &F, 4);
     return [NSData dataWithBytes:bytes length:sizeof bytes];
 }
 
@@ -79,18 +66,20 @@ __unused static NSData *entry12BelowNotch(NSUInteger logicalW, NSUInteger logica
     *outProduct = CGDisplayModelNumber(displayID);
 }
 
-- (NSString *)overridePathForDisplay:(CGDirectDisplayID)displayID {
+- (NSString *)overridePathUnderRoot:(NSString *)root
+                         forDisplay:(CGDirectDisplayID)displayID {
     uint32_t vendor = 0, product = 0;
     [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
     return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
-            kOverridesLibraryRoot, vendor, product];
+            root, vendor, product];
+}
+
+- (NSString *)overridePathForDisplay:(CGDirectDisplayID)displayID {
+    return [self overridePathUnderRoot:kOverridesLibraryRoot forDisplay:displayID];
 }
 
 - (NSString *)systemOverridePathForDisplay:(CGDirectDisplayID)displayID {
-    uint32_t vendor = 0, product = 0;
-    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
-    return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
-            kOverridesSystemRoot, vendor, product];
+    return [self overridePathUnderRoot:kOverridesSystemRoot forDisplay:displayID];
 }
 
 - (BOOL)isInstalledForDisplay:(CGDirectDisplayID)displayID {

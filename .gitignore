@@ -5,6 +5,7 @@
 *.d
 DisplayDisabler
 DisplayDisabler.app/
+sa/bin/
 AppIcon.icns
 AppIcon.iconset/
 *.log

@@ -1,5 +1,3 @@
-
-
 #import <AppKit/AppKit.h>
 
 static void renderAtSize(CGFloat size, NSString *path) {
