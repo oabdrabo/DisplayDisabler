@@ -20,10 +20,6 @@ static NSError *transparencyError(NSInteger code, NSString *message) {
 @implementation DDAppWindows
 @end
 
-@interface WindowTransparency ()
-@property (nonatomic, strong) NSMutableSet<NSNumber *> *touchedWindows;
-@end
-
 @implementation WindowTransparency
 
 + (instancetype)shared {
@@ -31,12 +27,6 @@ static NSError *transparencyError(NSInteger code, NSString *message) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ instance = [[WindowTransparency alloc] init]; });
     return instance;
-}
-
-- (instancetype)init {
-    self = [super init];
-    if (self) { _touchedWindows = [NSMutableSet set]; }
-    return self;
 }
 
 - (NSString *)socketPath {
@@ -91,18 +81,27 @@ static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
     if ([self reloadSilently]) return;
 
     NSString *saDir = [[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"sa"];
-    NSString *script = [saDir stringByAppendingPathComponent:@"install.sh"];
-    if (![[NSFileManager defaultManager] isReadableFileAtPath:script]) {
-        NSLog(@"DisplayDisabler: bundled SA installer missing at %@", script);
+    if (![[NSFileManager defaultManager]
+            isReadableFileAtPath:[saDir stringByAppendingPathComponent:@"loader"]]) {
+        NSLog(@"DisplayDisabler: bundled scripting addition missing in %@", saDir);
         return;
     }
 
+    NSString *cmd = [NSString stringWithFormat:
+        @"mkdir -p /Library/DisplayDisabler && "
+        @"cp '%@/loader' /Library/DisplayDisabler/loader && "
+        @"cp '%@/payload' /Library/DisplayDisabler/payload && "
+        @"chown -R root:wheel /Library/DisplayDisabler && "
+        @"chmod -R 755 /Library/DisplayDisabler && "
+        @"echo '%@ ALL=(root) NOPASSWD: %@' > /etc/sudoers.d/displaydisabler && "
+        @"chmod 440 /etc/sudoers.d/displaydisabler && "
+        @"%@",
+        saDir, saDir, NSUserName(), kSALoaderPath, kSALoaderPath];
+
     NSString *source = [NSString stringWithFormat:
-        @"do shell script \"/bin/sh '%@' '%@' '%@'\" with administrator privileges",
-        script, saDir, NSUserName()];
-    NSAppleScript *as = [[NSAppleScript alloc] initWithSource:source];
+        @"do shell script \"%@\" with administrator privileges", cmd];
     NSDictionary *err = nil;
-    [as executeAndReturnError:&err];
+    [[[NSAppleScript alloc] initWithSource:source] executeAndReturnError:&err];
     if (err) NSLog(@"DisplayDisabler: SA install failed: %@", err);
 }
 
@@ -132,11 +131,8 @@ static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
         if (bounds.size.width < 80 || bounds.size.height < 80) continue;
 
         DDWindow *w = [[DDWindow alloc] init];
-        w.windowID  = [(NSNumber *)info[(__bridge NSString *)kCGWindowNumber] unsignedIntValue];
-        w.ownerPID  = pidNum.intValue;
-        w.title     = info[(__bridge NSString *)kCGWindowName] ?: @"";
-        w.alpha     = [(NSNumber *)info[(__bridge NSString *)kCGWindowAlpha] floatValue];
-        w.bounds    = bounds;
+        w.windowID = [(NSNumber *)info[(__bridge NSString *)kCGWindowNumber] unsignedIntValue];
+        w.alpha    = [(NSNumber *)info[(__bridge NSString *)kCGWindowAlpha] floatValue];
 
         DDAppWindows *app = byPID[pidNum];
         if (!app) {
@@ -180,13 +176,7 @@ static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
         if (error) *error = transparencyError(errno, @"Failed to send to backend.");
         return NO;
     }
-    if (alpha < 1.0f) [self.touchedWindows addObject:@(windowID)];
     return YES;
-}
-
-- (BOOL)setAlpha:(float)alpha forWindow:(uint32_t)windowID error:(NSError **)error {
-    [self reloadSilently];
-    return [self applyAlpha:alpha toWindowID:windowID error:error];
 }
 
 - (BOOL)applyAlpha:(float)alpha toWindowsMatching:(BOOL (^)(DDAppWindows *app))match

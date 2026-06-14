@@ -59,7 +59,7 @@ bundle: $(EXECUTABLE) AppIcon.icns sa
 	@cp $(EXECUTABLE) "$(BUNDLE)/Contents/MacOS/$(EXECUTABLE)"
 	@cp Info.plist "$(BUNDLE)/Contents/Info.plist"
 	@cp AppIcon.icns "$(BUNDLE)/Contents/Resources/AppIcon.icns"
-	@cp $(SA_BIN)/loader $(SA_BIN)/payload sa/install.sh "$(BUNDLE)/Contents/Resources/sa/"
+	@cp $(SA_BIN)/loader $(SA_BIN)/payload "$(BUNDLE)/Contents/Resources/sa/"
 	@/bin/echo -n "APPL????" > "$(BUNDLE)/Contents/PkgInfo"
 	@echo "Built $(BUNDLE)"
 
@@ -69,6 +69,7 @@ sign: bundle
 	@echo "Signed $(BUNDLE) (ad-hoc)"
 
 install: all
+	@rm -rf "/Applications/$(BUNDLE)"
 	@cp -R "$(BUNDLE)" /Applications/
 	@echo "Installed to /Applications/$(BUNDLE)"
 

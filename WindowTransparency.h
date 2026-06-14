@@ -5,10 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface DDWindow : NSObject
 @property (nonatomic) uint32_t windowID;
-@property (nonatomic) pid_t ownerPID;
-@property (nonatomic, copy) NSString *title;
 @property (nonatomic) float alpha;
-@property (nonatomic) CGRect bounds;
 @end
 
 @interface DDAppWindows : NSObject
@@ -26,7 +23,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (NSArray<DDAppWindows *> *)appsWithWindows;
 
-- (BOOL)setAlpha:(float)alpha forWindow:(uint32_t)windowID error:(NSError **)error;
 - (BOOL)setAlpha:(float)alpha forApp:(pid_t)pid error:(NSError **)error;
 - (BOOL)setAlphaForAllWindows:(float)alpha error:(NSError **)error;
 - (BOOL)resetAllWindows:(NSError **)error;
