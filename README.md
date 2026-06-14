@@ -27,7 +27,7 @@ cd DisplayDisabler
 make install      # builds, signs (ad-hoc), and copies to /Applications
 ```
 
-Requires Xcode Command Line Tools (`xcode-select --install`). Use the menu-bar icon → **Settings → Launch at Login** to start it automatically.
+Requires Xcode Command Line Tools (`xcode-select --install`). It launches at login by default; toggle that off under the menu-bar icon → **Settings → Launch at Login**.
 
 ## Project layout
 
