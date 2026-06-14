@@ -3,6 +3,7 @@
 #import "Brightness.h"
 #import "HiDPIInjector.h"
 #import "WindowTransparency.h"
+#import "BrightnessBooster.h"
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <objc/runtime.h>
@@ -66,6 +67,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         [strongSelf.displayManager pruneStaleVirtualDisplays];
         [strongSelf.displayManager realignForcedDisplay];
         [[Brightness shared] invalidateServiceCache];
+        [[BrightnessBooster shared] reapply];
         [strongSelf rebuildMenu];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
@@ -229,8 +231,14 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     if ([[Brightness shared] supportsBrightness:display.displayID]) {
         int b = [[Brightness shared] brightnessPercentForDisplay:display.displayID];
         if (b < 0) b = 100;
-        [menu addItem:[self sliderRowWithLabel:@"Brightness" percent:b minPct:10
-                                    continuous:YES tag:display.displayID
+        // If an XDR boost is active, the slider sits above 100%.
+        float boost = [[BrightnessBooster shared] boostForDisplay:display.displayID];
+        int shown = boost > 1.0f ? (int)lroundf(boost * 100.0f) : b;
+        int maxPct = (int)lroundf([[BrightnessBooster shared]
+                                   maxBoostForDisplay:display.displayID] * 100.0f);
+        if (maxPct < 100) maxPct = 100;
+        [menu addItem:[self sliderRowWithLabel:@"Brightness" percent:shown minPct:10
+                                        maxPct:maxPct continuous:YES tag:display.displayID
                                         action:@selector(brightnessSliderChanged:)]];
     }
     if ([self pref:kShowResolutions]) {
@@ -241,7 +249,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         if (lw) {
             [rt appendFormat:@"   %@", ddLogicalString(lw, lh)];
             if (display.isHiDPI) [rt appendString:@"  HiDPI"];
-            if (display.refreshRate > 0) [rt appendFormat:@" · %.0fHz", display.refreshRate];
         }
         NSMenuItem *res = [[NSMenuItem alloc] initWithTitle:rt action:nil keyEquivalent:@""];
         res.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
@@ -357,13 +364,13 @@ static NSString *ddLogicalString(size_t w, size_t h) {
             if (p < pct) pct = p;
         }
         [menu addItem:[self sliderRowWithLabel:app.name percent:pct minPct:20
-                                    continuous:YES tag:app.pid
+                                        maxPct:100 continuous:YES tag:app.pid
                                         action:@selector(opacitySliderChanged:)]];
     }
 
     [menu addItem:[NSMenuItem separatorItem]];
     [menu addItem:[self sliderRowWithLabel:@"All apps" percent:100 minPct:20
-                                continuous:YES tag:0
+                                    maxPct:100 continuous:YES tag:0
                                     action:@selector(opacitySliderChanged:)]];
     NSMenuItem *reset = [[NSMenuItem alloc]
         initWithTitle:@"Reset all (100%)"
@@ -375,6 +382,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (NSMenuItem *)sliderRowWithLabel:(NSString *)label
                            percent:(int)pct
                             minPct:(int)minPct
+                            maxPct:(int)maxPct
                         continuous:(BOOL)continuous
                                tag:(NSInteger)tag
                             action:(SEL)action {
@@ -389,7 +397,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 
     NSSlider *slider = [NSSlider sliderWithValue:pct / 100.0
                                         minValue:minPct / 100.0
-                                        maxValue:1.0
+                                        maxValue:maxPct / 100.0
                                           target:self
                                           action:action];
     slider.continuous = continuous;
@@ -459,11 +467,20 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 
 - (void)brightnessSliderChanged:(NSSlider *)sender {
     [self syncSliderLabel:sender];
+    CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
+    double val = sender.doubleValue;            // 0.1 … maxBoost (e.g. 2.0)
     NSError *error = nil;
-    if (![[Brightness shared] setBrightnessPercent:(uint8_t)lround(sender.doubleValue * 100)
-                                        forDisplay:(CGDirectDisplayID)sender.tag error:&error]) {
-        NSLog(@"DisplayDisabler: brightness failed: %@", error);
+    if (val <= 1.0) {
+        // Normal backlight; turn off any XDR boost.
+        [[BrightnessBooster shared] setBoost:1.0f forDisplay:did];
+        [[Brightness shared] setBrightnessPercent:(uint8_t)lround(val * 100)
+                                       forDisplay:did error:&error];
+    } else {
+        // Backlight pinned at 100%, push the rest with the XDR boost overlay.
+        [[Brightness shared] setBrightnessPercent:100 forDisplay:did error:&error];
+        [[BrightnessBooster shared] setBoost:(float)val forDisplay:did];
     }
+    if (error) NSLog(@"DisplayDisabler: brightness failed: %@", error);
 }
 
 - (void)resetAllTransparency:(NSMenuItem *)sender {

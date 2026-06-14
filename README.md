@@ -8,7 +8,7 @@ A tiny macOS **menu-bar app** for MacBook display control, built on private Core
 
 - **Disable / enable any display** — e.g. turn off the built-in panel in clamshell/headless setups so it stays off when the lid opens. Optionally auto-disable the built-in display whenever an external monitor is connected.
 - **Force HiDPI** — add scaled (retina) resolutions to displays that don't natively offer them, via a mirrored private `SLVirtualDisplay`. Also installs persistent "crisp HiDPI" override plists.
-- **Brightness** — built-in panel via `DisplayServices`, external monitors via DDC/CI.
+- **Brightness** — built-in panel via `DisplayServices`, external monitors via DDC/CI. On XDR/EDR displays the slider goes **above 100%**: it pins the backlight at 100% and engages the HDR headroom with a multiply-blend EDR overlay (the [xdr-boost](https://github.com/levelsio/xdr-boost)/Vivid technique), scaling the whole screen brighter while preserving colors.
 - **Window transparency** — set per-app or all-window opacity for *any* application, using a self-contained scripting addition the app injects into Dock (no external tools).
 
 Everything lives in one menu-bar icon: a **Displays** submenu and a **Transparency** submenu.

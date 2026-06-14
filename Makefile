@@ -7,9 +7,9 @@ CFLAGS     = -fobjc-arc -Wall -Wextra -O2 -fstack-protector-strong \
              -mmacosx-version-min=14.0 -MMD -MP
 FRAMEWORKS = -framework Cocoa -framework CoreGraphics -framework IOKit \
              -framework ServiceManagement -framework UserNotifications \
-             -framework CoreDisplay
+             -framework CoreDisplay -framework Metal -framework QuartzCore
 SOURCES    = main.m AppDelegate.m DisplayManager.m Brightness.m HiDPIInjector.m \
-             WindowTransparency.m
+             WindowTransparency.m BrightnessBooster.m
 OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
