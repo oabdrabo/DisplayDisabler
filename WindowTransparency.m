@@ -77,6 +77,16 @@ static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
     return [self backendAvailable];
 }
 
+static NSString *shellQuote(NSString *s) {
+    return [NSString stringWithFormat:@"'%@'",
+            [s stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+}
+
+static NSString *appleScriptEscape(NSString *s) {
+    NSString *o = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    return [o stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+}
+
 - (void)ensureBackendLoaded {
     if ([self reloadSilently]) return;
 
@@ -87,19 +97,26 @@ static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
         return;
     }
 
+    // The bundle path and sudoers line are shell-quoted, then the whole command
+    // is AppleScript-escaped, so a path containing quotes can't break out into
+    // the root shell.
+    NSString *sudoLine = shellQuote([NSString stringWithFormat:
+        @"%@ ALL=(root) NOPASSWD: %@", NSUserName(), kSALoaderPath]);
     NSString *cmd = [NSString stringWithFormat:
         @"mkdir -p /Library/DisplayDisabler && "
-        @"cp '%@/loader' /Library/DisplayDisabler/loader && "
-        @"cp '%@/payload' /Library/DisplayDisabler/payload && "
+        @"cp %@ /Library/DisplayDisabler/loader && "
+        @"cp %@ /Library/DisplayDisabler/payload && "
         @"chown -R root:wheel /Library/DisplayDisabler && "
         @"chmod -R 755 /Library/DisplayDisabler && "
-        @"echo '%@ ALL=(root) NOPASSWD: %@' > /etc/sudoers.d/displaydisabler && "
+        @"echo %@ > /etc/sudoers.d/displaydisabler && "
         @"chmod 440 /etc/sudoers.d/displaydisabler && "
         @"%@",
-        saDir, saDir, NSUserName(), kSALoaderPath, kSALoaderPath];
+        shellQuote([saDir stringByAppendingPathComponent:@"loader"]),
+        shellQuote([saDir stringByAppendingPathComponent:@"payload"]),
+        sudoLine, kSALoaderPath];
 
     NSString *source = [NSString stringWithFormat:
-        @"do shell script \"%@\" with administrator privileges", cmd];
+        @"do shell script \"%@\" with administrator privileges", appleScriptEscape(cmd)];
     NSDictionary *err = nil;
     [[[NSAppleScript alloc] initWithSource:source] executeAndReturnError:&err];
     if (err) NSLog(@"DisplayDisabler: SA install failed: %@", err);

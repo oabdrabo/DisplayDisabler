@@ -134,6 +134,11 @@ static NSString *ddLogicalString(size_t w, size_t h) {
                        statusItemWithLength:NSVariableStatusItemLength];
     self.statusItem.button.toolTip = @"DisplayDisabler";
     [self updateStatusIcon:NO];
+
+    NSMenu *menu = [[NSMenu alloc] init];
+    menu.autoenablesItems = NO;
+    menu.delegate = self;
+    self.statusItem.menu = menu;
 }
 
 - (void)updateStatusIcon:(BOOL)hasDisabledDisplay {
@@ -148,8 +153,11 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 }
 
 - (void)rebuildMenu {
-    NSMenu *menu = [[NSMenu alloc] init];
-    menu.autoenablesItems = NO;
+    [self populateMainMenu:self.statusItem.menu];
+}
+
+- (void)populateMainMenu:(NSMenu *)menu {
+    [menu removeAllItems];
 
     NSArray<DDDisplayInfo *> *displays = [self.displayManager allDisplays];
     BOOL anyDisabled = NO;
@@ -181,8 +189,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         action:@selector(terminate:) keyEquivalent:@"q"];
     quit.target = NSApp;
     [menu addItem:quit];
-
-    self.statusItem.menu = menu;
 }
 
 - (NSMenuItem *)actionItem:(NSString *)title action:(SEL)action displayID:(CGDirectDisplayID)did {
@@ -214,7 +220,7 @@ static NSString *ddLogicalString(size_t w, size_t h) {
         int b = [[Brightness shared] brightnessPercentForDisplay:display.displayID];
         if (b < 0) b = 100;
         [menu addItem:[self sliderRowWithLabel:@"Brightness" percent:b minPct:10
-                                    continuous:NO tag:display.displayID
+                                    continuous:YES tag:display.displayID
                                         action:@selector(brightnessSliderChanged:)]];
     }
     if ([self pref:kShowResolutions]) {
@@ -434,6 +440,11 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
+    if (menu == self.statusItem.menu) {
+        [self populateMainMenu:menu];
+        return;
+    }
+
     [menu removeAllItems];
 
     [menu addItem:[self switchRowWithTitle:
