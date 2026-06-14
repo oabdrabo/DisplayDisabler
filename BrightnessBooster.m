@@ -3,10 +3,6 @@
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 
-// One fullscreen multiply-blend EDR overlay per boosted display. It renders a
-// solid white above 1.0 every vsync (via CADisplayLink) so the system keeps the
-// HDR backlight headroom engaged; multiply blend scales the screen by `boost`
-// while preserving colors.
 @interface DDBoost : NSObject
 @property (nonatomic) CGDirectDisplayID displayID;
 @property (nonatomic) float boost;

@@ -140,8 +140,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     self.statusItem.button.toolTip =
         @"DisplayDisabler — click to keep awake, right-click for the menu";
 
-    // The menu is not attached directly so a left-click can toggle keep-awake;
-    // it's shown on right/control-click instead.
     self.mainMenu = [[NSMenu alloc] init];
     self.mainMenu.autoenablesItems = NO;
     self.mainMenu.delegate = self;
@@ -223,8 +221,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (void)addKeepAwakeSectionToMenu:(NSMenu *)menu {
     Caffeine *caf = [Caffeine shared];
 
-    // The on/off toggle lives on the menu-bar icon (left-click); the menu only
-    // offers the timed durations the icon can't.
     if (caf.active && caf.expiry) {
         NSDateFormatter *df = [[NSDateFormatter alloc] init];
         df.timeStyle = NSDateFormatterShortStyle;
@@ -296,7 +292,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     if ([[Brightness shared] supportsBrightness:display.displayID]) {
         int b = [[Brightness shared] brightnessPercentForDisplay:display.displayID];
         if (b < 0) b = 100;
-        // If an XDR boost is active, the slider sits above 100%.
         float boost = [[BrightnessBooster shared] boostForDisplay:display.displayID];
         int shown = boost > 1.0f ? (int)lroundf(boost * 100.0f) : b;
         int maxPct = (int)lroundf([[BrightnessBooster shared]
@@ -480,8 +475,6 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     [row addSubview:value];
     objc_setAssociatedObject(slider, kDDPctLabelKey, value, OBJC_ASSOCIATION_ASSIGN);
 
-    // Row width is set to the final menu width in -sizeSliderRowsInMenu: (NSMenu
-    // does not stretch custom views), so the slider + value fill to the edge.
     [NSLayoutConstraint activateConstraints:@[
         [row.heightAnchor constraintEqualToConstant:24],
         [name.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
@@ -530,15 +523,13 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (void)brightnessSliderChanged:(NSSlider *)sender {
     [self syncSliderLabel:sender];
     CGDirectDisplayID did = (CGDirectDisplayID)sender.tag;
-    double val = sender.doubleValue;            // 0.1 … maxBoost (e.g. 2.0)
+    double val = sender.doubleValue;
     NSError *error = nil;
     if (val <= 1.0) {
-        // Normal backlight; turn off any XDR boost.
         [[BrightnessBooster shared] setBoost:1.0f forDisplay:did];
         [[Brightness shared] setBrightnessPercent:(uint8_t)lround(val * 100)
                                        forDisplay:did error:&error];
     } else {
-        // Backlight pinned at 100%, push the rest with the XDR boost overlay.
         [[Brightness shared] setBrightnessPercent:100 forDisplay:did error:&error];
         [[BrightnessBooster shared] setBoost:(float)val forDisplay:did];
     }

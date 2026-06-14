@@ -1,9 +1,3 @@
-// DisplayDisabler scripting-addition payload.
-// Runs inside Dock (dlopen'd by the injected loader). Listens on a private
-// unix socket and applies window opacity via Dock's privileged WindowServer
-// connection. Socket/opcode wire-format is compatible with the yabai
-// scripting addition (MIT) so the protocol matches our in-app client.
-
 #include <Foundation/Foundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <pthread.h>

@@ -1,8 +1,3 @@
-// Adapted from yabai (https://github.com/koekeishiya/yabai), MIT License.
-// Injection loader: task_for_pid(Dock) + arm64e/x86_64 shellcode bootstrap
-// that dlopen()s our payload into Dock so it runs with Dock's privileged
-// WindowServer connection. Retargeted to DisplayDisabler's payload path.
-
 #include <Cocoa/Cocoa.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -17,85 +12,48 @@ kern_return_t (*_thread_convert_thread_state)(thread_act_t thread, int direction
 
 static char *payload_path = "/Library/DisplayDisabler/payload";
 
-//
-// :Attribution
-//
-// The arm64e injection path is based on work by Jeremy Legendre (https://github.com/jslegendre)
-//
-
 static char shell_code[] =
-#ifdef __x86_64__
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\x48\x83\xEC\x10"                 // sub        rsp, 0x10
-"\x48\x8D\x7D\xF8"                 // lea        rdi, qword [rbp+var_8]
-"\x31\xC0"                         // xor        eax, eax
-"\x89\xC1"                         // mov        ecx, eax
-"\x48\x8D\x15\x1E\x00\x00\x00"     // lea        rdx, qword ptr [rip+0x1E]
-"\x48\x89\xCE"                     // mov        rsi, rcx
-"\x48\xB8"                         // movabs     rax, pthread_create_from_mach_thread
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x48\x83\xC4\x10"                 // add        rsp, 0x10
-"\x5D"                             // pop        rbp
-"\x48\xC7\xC0\x65\x62\x61\x79"     // mov        rax, 0x79616265
-"\xEB\xFE"                         // jmp        0x0
-"\xC3"                             // ret
-"\x55"                             // push       rbp
-"\x48\x89\xE5"                     // mov        rbp, rsp
-"\xBE\x01\x00\x00\x00"             // mov        esi, 0x1
-"\x48\x8D\x3D\x16\x00\x00\x00"     // lea        rdi, qword ptr [rip+0x16]
-"\x48\xB8"                         // movabs     rax, dlopen
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\xFF\xD0"                         // call       rax
-"\x31\xF6"                         // xor        esi, esi
-"\x89\xF7"                         // mov        edi, esi
-"\x48\x89\xF8"                     // mov        rax, rdi
-"\x5D"                             // pop        rbp
-"\xC3"                             // ret
-#elif __arm64__
-"\xFF\xC3\x00\xD1"                 // sub        sp, sp, #0x30
-"\xFD\x7B\x02\xA9"                 // stp        x29, x30, [sp, #0x20]
-"\xFD\x83\x00\x91"                 // add        x29, sp, #0x20
-"\xA0\xC3\x1F\xB8"                 // stur       w0, [x29, #-0x4]
-"\xE1\x0B\x00\xF9"                 // str        x1, [sp, #0x10]
-"\xE0\x23\x00\x91"                 // add        x0, sp, #0x8
-"\x08\x00\x80\xD2"                 // mov        x8, #0
-"\xE8\x07\x00\xF9"                 // str        x8, [sp, #0x8]
-"\xE1\x03\x08\xAA"                 // mov        x1, x8
-"\xE2\x01\x00\x10"                 // adr        x2, #0x3C
-"\xE2\x23\xC1\xDA"                 // paciza     x2
-"\xE3\x03\x08\xAA"                 // mov        x3, x8
-"\x49\x01\x00\x10"                 // adr        x9, #0x28 ; pthread_create_from_mach_thread
-"\x29\x01\x40\xF9"                 // ldr        x9, [x9]
-"\x20\x01\x3F\xD6"                 // blr        x9
-"\xA0\x4C\x8C\xD2"                 // movz       x0, #0x6265
-"\x20\x2C\xAF\xF2"                 // movk       x0, #0x7961, lsl #16
-"\x09\x00\x00\x10"                 // adr        x9, #0
-"\x20\x01\x1F\xD6"                 // br         x9
-"\xFD\x7B\x42\xA9"                 // ldp        x29, x30, [sp, #0x20]
-"\xFF\xC3\x00\x91"                 // add        sp, sp, #0x30
-"\xC0\x03\x5F\xD6"                 // ret
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-"\x7F\x23\x03\xD5"                 // pacibsp
-"\xFF\xC3\x00\xD1"                 // sub        sp, sp, #0x30
-"\xFD\x7B\x02\xA9"                 // stp        x29, x30, [sp, #0x20]
-"\xFD\x83\x00\x91"                 // add        x29, sp, #0x20
-"\xA0\xC3\x1F\xB8"                 // stur       w0, [x29, #-0x4]
-"\xE1\x0B\x00\xF9"                 // str        x1, [sp, #0x10]
-"\x21\x00\x80\xD2"                 // mov        x1, #1
-"\x60\x01\x00\x10"                 // adr        x0, #0x2c ; payload_path
-"\x09\x01\x00\x10"                 // adr        x9, #0x20 ; dlopen
-"\x29\x01\x40\xF9"                 // ldr        x9, [x9]
-"\x20\x01\x3F\xD6"                 // blr        x9
-"\x09\x00\x80\x52"                 // mov        w9, #0
-"\xE0\x03\x09\xAA"                 // mov        x0, x9
-"\xFD\x7B\x42\xA9"                 // ldp        x29, x30, [sp, #0x20]
-"\xFF\xC3\x00\x91"                 // add        sp, sp, #0x30
-"\xFF\x0F\x5F\xD6"                 // retab
-"\x00\x00\x00\x00\x00\x00\x00\x00" //
-#endif
-"\x00\x00\x00\x00\x00\x00\x00\x00" // empty space for payload_path
+"\xFF\xC3\x00\xD1"
+"\xFD\x7B\x02\xA9"
+"\xFD\x83\x00\x91"
+"\xA0\xC3\x1F\xB8"
+"\xE1\x0B\x00\xF9"
+"\xE0\x23\x00\x91"
+"\x08\x00\x80\xD2"
+"\xE8\x07\x00\xF9"
+"\xE1\x03\x08\xAA"
+"\xE2\x01\x00\x10"
+"\xE2\x23\xC1\xDA"
+"\xE3\x03\x08\xAA"
+"\x49\x01\x00\x10"
+"\x29\x01\x40\xF9"
+"\x20\x01\x3F\xD6"
+"\xA0\x4C\x8C\xD2"
+"\x20\x2C\xAF\xF2"
+"\x09\x00\x00\x10"
+"\x20\x01\x1F\xD6"
+"\xFD\x7B\x42\xA9"
+"\xFF\xC3\x00\x91"
+"\xC0\x03\x5F\xD6"
+"\x00\x00\x00\x00\x00\x00\x00\x00"
+"\x7F\x23\x03\xD5"
+"\xFF\xC3\x00\xD1"
+"\xFD\x7B\x02\xA9"
+"\xFD\x83\x00\x91"
+"\xA0\xC3\x1F\xB8"
+"\xE1\x0B\x00\xF9"
+"\x21\x00\x80\xD2"
+"\x60\x01\x00\x10"
+"\x09\x01\x00\x10"
+"\x29\x01\x40\xF9"
+"\x20\x01\x3F\xD6"
+"\x09\x00\x80\x52"
+"\xE0\x03\x09\xAA"
+"\xFD\x7B\x42\xA9"
+"\xFF\xC3\x00\x91"
+"\xFF\x0F\x5F\xD6"
+"\x00\x00\x00\x00\x00\x00\x00\x00"
+"\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -164,21 +122,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-#ifdef __x86_64__
-    uint64_t pcfmt_address = (uint64_t) dlsym(RTLD_DEFAULT, "pthread_create_from_mach_thread");
-    uint64_t dlopen_address = (uint64_t) dlsym(RTLD_DEFAULT, "dlopen");
-
-    memcpy(shell_code + 28, &pcfmt_address, sizeof(uint64_t));
-    memcpy(shell_code + 71, &dlopen_address, sizeof(uint64_t));
-    memcpy(shell_code + 90, payload_path, strlen(payload_path));
-#elif __arm64__
     uint64_t pcfmt_address = (uint64_t) ptrauth_strip(dlsym(RTLD_DEFAULT, "pthread_create_from_mach_thread"), ptrauth_key_function_pointer);
     uint64_t dlopen_address = (uint64_t) ptrauth_strip(dlsym(RTLD_DEFAULT, "dlopen"), ptrauth_key_function_pointer);
 
     memcpy(shell_code + 88, &pcfmt_address, sizeof(uint64_t));
     memcpy(shell_code + 160, &dlopen_address, sizeof(uint64_t));
     memcpy(shell_code + 168, payload_path, strlen(payload_path));
-#endif
 
     if (mach_vm_write(task, code, (vm_address_t) shell_code, sizeof(shell_code)) != KERN_SUCCESS) {
         fprintf(stderr, "could not copy shellcode into code segment\n");
@@ -190,20 +139,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-#ifdef __x86_64__
-    x86_thread_state64_t thread_state = {};
-    thread_state_flavor_t thread_flavor = x86_THREAD_STATE64;
-    mach_msg_type_number_t thread_flavor_count = x86_THREAD_STATE64_COUNT;
-
-    thread_state.__rip = (uint64_t) code;
-    thread_state.__rsp = (uint64_t) stack + (stack_size / 2);
-
-    kern_return_t error = thread_create_running(task, thread_flavor, (thread_state_t)&thread_state, thread_flavor_count, &thread);
-    if (error != KERN_SUCCESS) {
-        fprintf(stderr, "could not spawn remote thread: %s\n", mach_error_string(error));
-        return 1;
-    }
-#elif __arm64__
     void *handle = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_GLOBAL | RTLD_LAZY);
     if (handle) {
         _thread_convert_thread_state = dlsym(handle, "thread_convert_thread_state");
@@ -256,7 +191,6 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-#endif
 
     usleep(10000);
 
@@ -268,11 +202,7 @@ int main(int argc, char **argv)
             goto terminate;
         }
 
-#ifdef __x86_64__
-        if (thread_state.__rax == 0x79616265) {
-#elif __arm64__
         if (thread_state.__x[0] == 0x79616265) {
-#endif
             result = 0;
             goto terminate;
         }

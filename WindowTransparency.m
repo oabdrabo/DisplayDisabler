@@ -97,9 +97,6 @@ static NSString *appleScriptEscape(NSString *s) {
         return;
     }
 
-    // The bundle path and sudoers line are shell-quoted, then the whole command
-    // is AppleScript-escaped, so a path containing quotes can't break out into
-    // the root shell.
     NSString *sudoLine = shellQuote([NSString stringWithFormat:
         @"%@ ALL=(root) NOPASSWD: %@", NSUserName(), kSALoaderPath]);
     NSString *cmd = [NSString stringWithFormat:

@@ -346,9 +346,6 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
         [result addObject:info];
     }
 
-    // Surface displays we disabled (they've dropped off the online list, so
-    // they wouldn't appear otherwise — leaving no way to re-enable them).
-    // Reconcile: drop any that have since come back online on their own.
     if (self.disabledInfos.count > 0) {
         NSMutableArray<NSNumber *> *reappeared = [NSMutableArray array];
         for (NSNumber *idNum in self.disabledInfos) {
@@ -503,8 +500,6 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 }
 
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error {
-    // Capture the display's details first: once disabled it drops off the online
-    // list, so this is the only record we have to keep showing it (with "Enable").
     DDDisplayInfo *captured = nil;
     for (DDDisplayInfo *d in [self allDisplays]) {
         if (d.displayID == displayID) { captured = d; break; }
@@ -936,8 +931,6 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
                                 m.logicalWidth, m.logicalHeight]];
     }
 
-    // Synthetic options are realised via a virtual display pinned to the source
-    // panel's current refresh rate, so report that rate rather than a blank.
     double currentRate = 0;
     CGDisplayModeRef curMode = CGDisplayCopyDisplayMode(displayID);
     if (curMode) {

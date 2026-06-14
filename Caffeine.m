@@ -34,7 +34,7 @@ static NSString *const kExpiryKey = @"CaffeineExpiry";
     if (![d boolForKey:kActiveKey]) return;
     NSDate *exp = [d objectForKey:kExpiryKey];
     if (exp && [exp timeIntervalSinceNow] <= 0) {
-        [self persist];                       // expired while we were away
+        [self persist];
         return;
     }
     [self activateForDuration:exp ? [exp timeIntervalSinceNow] : 0];
