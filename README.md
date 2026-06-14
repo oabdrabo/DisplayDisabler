@@ -1,65 +1,40 @@
 # DisplayDisabler
 
-Disable a MacBook's built-in display using private Apple CoreGraphics APIs. A 51 KB open-source alternative to BetterDisplay (30+ MB commercial app) for users who only need the disable-internal-display feature on headless / clamshell-mode MacBook setups.
+A tiny macOS **menu-bar app** for MacBook display control, built on private CoreGraphics / SkyLight APIs — a lightweight alternative to large commercial display utilities.
 
-[![Latest release](https://img.shields.io/github/v/release/oabdrabo/DisplayDisabler?label=release)](https://github.com/oabdrabo/DisplayDisabler/releases)
 [![License](https://img.shields.io/github/license/oabdrabo/DisplayDisabler)](LICENSE)
 
-## Why
+## Features
 
-Closing a MacBook in clamshell mode and connecting an external display works, but the *moment the lid opens* the internal display reactivates. For headless / docked / external-monitor-only setups, you want the internal display permanently disabled until you explicitly re-enable it.
+- **Disable / enable any display** — e.g. turn off the built-in panel in clamshell/headless setups so it stays off when the lid opens. Optionally auto-disable the built-in display whenever an external monitor is connected.
+- **Force HiDPI** — add scaled (retina) resolutions to displays that don't natively offer them, via a mirrored private `SLVirtualDisplay`. Also installs persistent "crisp HiDPI" override plists.
+- **Brightness** — built-in panel via `DisplayServices`, external monitors via DDC/CI.
+- **Window transparency** — set per-app or all-window opacity for *any* application, using a self-contained scripting addition the app injects into Dock (no external tools).
 
-Existing tools:
+Everything lives in one menu-bar icon: a **Displays** submenu and a **Transparency** submenu.
 
-| Tool | Size | Notes |
-|---|---|---|
-| **BetterDisplay** | 30+ MB | Full-featured display management; overkill if you only need one feature |
-| **DisplayDisabler** | 51 KB | Single-purpose, single-binary, no UI background process |
+## Requirements
 
-## Install
+- macOS 14+ (Apple Silicon).
+- **Window transparency only:** System Integrity Protection disabled and the `-arm64e_preview_abi` boot-arg set — these are what allow injecting the opacity payload into Dock. (Display/HiDPI/brightness features work without them.) First use prompts once for an admin password to install the scripting addition; afterwards it loads silently.
 
-```sh
-# Download the latest binary
-curl -L -o DisplayDisabler https://github.com/oabdrabo/DisplayDisabler/releases/latest/download/DisplayDisabler
-chmod +x DisplayDisabler
-sudo mv DisplayDisabler /usr/local/bin/
-```
-
-Or build from source — see below.
-
-## Usage
-
-```sh
-# Disable the internal display
-DisplayDisabler disable
-
-# Re-enable
-DisplayDisabler enable
-
-# Toggle
-DisplayDisabler toggle
-```
-
-## How it works
-
-Uses the private `CGSConfigureDisplayEnabled` Core Graphics function (part of `SkyLight.framework`) to flip the enabled state of the built-in display ID. The internal display retains its hardware identification but stops being part of the active display set.
-
-Because this is a private API, the behaviour can change between macOS releases. Tested on macOS 13–14.
-
-## Build from source
+## Build & install
 
 ```sh
 git clone https://github.com/oabdrabo/DisplayDisabler.git
 cd DisplayDisabler
-make
+make install      # builds, signs (ad-hoc), and copies to /Applications
 ```
 
-Requires Xcode Command Line Tools (`xcode-select --install`).
+Requires Xcode Command Line Tools (`xcode-select --install`). Use the menu-bar icon → **Settings → Launch at Login** to start it automatically.
+
+## How it works
+
+- Disabling uses the private `CGSConfigureDisplayEnabled`; Force HiDPI mirrors the panel onto a private `SLVirtualDisplay` pinned to the desired logical size.
+- Transparency injects a payload into Dock (`task_for_pid` + an arm64e bootstrap) that calls `SLSSetWindowAlpha` over a private unix socket. The injection technique is adapted from [yabai](https://github.com/koekeishiya/yabai) (MIT); see `sa/loader.m`.
+
+Because these are private APIs, behaviour can change between macOS releases.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Maintenance
-
-Supporting documentation lives in `docs/`, example inputs live in `examples/`, and lightweight validation notes live in `tests/smoke/`.
