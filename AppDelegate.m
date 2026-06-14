@@ -22,7 +22,7 @@ static const CGFloat kSwitchLabelGap   = 8;
 static const NSUInteger kModeColLogical = 17;
 static const NSUInteger kModeColType    = 10;
 
-static const CGFloat kSliderRowWidth = 300;
+static const CGFloat kSliderRowWidth = 232;
 static const void *kDDPctLabelKey = &kDDPctLabelKey;
 
 static NSString *ddPad(NSString *s, NSUInteger length) {
@@ -195,17 +195,9 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 - (void)addDisplaySectionToMenu:(NSMenu *)menu display:(DDDisplayInfo *)display {
     BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];
 
-    NSMutableArray<NSString *> *tags = [NSMutableArray array];
-    if (display.isActive && display.pixelWidth > 0)
-        [tags addObject:ddLogicalString(display.pixelWidth, display.pixelHeight)];
-    if (display.isActive && display.refreshRate > 0)
-        [tags addObject:[NSString stringWithFormat:@"%.0fHz", display.refreshRate]];
-    [tags addObject:(forced ? @"HiDPI" : (display.isActive ? @"on" : @"off"))];
-    if (display.isBuiltIn) [tags addObject:@"built-in"];
-    if (display.isMain)    [tags addObject:@"main"];
+    NSString *suffix = forced ? @"  \u00B7  HiDPI" : (display.isActive ? @"" : @"  \u00B7  off");
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:
-        [NSString stringWithFormat:@"%@ \u2014 %@", display.name,
-         [tags componentsJoinedByString:@" \u00B7 "]]]];
+        [display.name stringByAppendingString:suffix]]];
 
     if (forced) {
         [menu addItem:[self actionItem:@"Stop Forced HiDPI"
@@ -227,7 +219,11 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     }
     if ([self pref:kShowResolutions]) {
         NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:display.displayID];
-        NSMenuItem *res = [[NSMenuItem alloc] initWithTitle:@"Resolution" action:nil keyEquivalent:@""];
+        size_t lw = display.logicalWidth ?: display.pixelWidth;
+        size_t lh = display.logicalHeight ?: display.pixelHeight;
+        NSString *rt = lw ? [NSString stringWithFormat:@"Resolution   %@", ddLogicalString(lw, lh)]
+                          : @"Resolution";
+        NSMenuItem *res = [[NSMenuItem alloc] initWithTitle:rt action:nil keyEquivalent:@""];
         res.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
         [menu addItem:res];
     }
@@ -243,8 +239,8 @@ static NSString *ddLogicalString(size_t w, size_t h) {
 
     BOOL installed = [[HiDPIInjector shared] isInstalledForDisplay:display.displayID];
     [menu addItem:[self actionItem:(installed
-                                    ? @"Remove Crisp HiDPI Overrides\u2026"
-                                    : @"Install Crisp HiDPI (admin + reboot)\u2026")
+                                    ? @"Remove Crisp HiDPI\u2026"
+                                    : @"Install Crisp HiDPI\u2026")
                             action:(installed ? @selector(uninstallCrispHiDPI:)
                                               : @selector(installCrispHiDPI:))
                          displayID:display.displayID]];
@@ -358,15 +354,9 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     NSTextField *name = [NSTextField labelWithString:label];
     name.font = [NSFont menuFontOfSize:13];
     name.lineBreakMode = NSLineBreakByTruncatingTail;
-    name.frame = NSMakeRect(14, 4, 92, 16);
-    [row addSubview:name];
-
-    NSTextField *value = [NSTextField labelWithString:[NSString stringWithFormat:@"%d%%", pct]];
-    value.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
-    value.textColor = [NSColor secondaryLabelColor];
-    value.alignment = NSTextAlignmentRight;
-    value.frame = NSMakeRect(kSliderRowWidth - 50, 4, 36, 16);
-    [row addSubview:value];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [name setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSSlider *slider = [NSSlider sliderWithValue:pct / 100.0
                                         minValue:minPct / 100.0
@@ -376,9 +366,35 @@ static NSString *ddLogicalString(size_t w, size_t h) {
     slider.continuous = continuous;
     slider.controlSize = NSControlSizeSmall;
     slider.tag = tag;
-    slider.frame = NSMakeRect(112, 2, kSliderRowWidth - 112 - 54, 20);
-    objc_setAssociatedObject(slider, kDDPctLabelKey, value, OBJC_ASSOCIATION_ASSIGN);
+    slider.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *value = [NSTextField labelWithString:[NSString stringWithFormat:@"%d%%", pct]];
+    value.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    value.textColor = [NSColor secondaryLabelColor];
+    value.alignment = NSTextAlignmentRight;
+    value.translatesAutoresizingMaskIntoConstraints = NO;
+    [value setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    [row addSubview:name];
     [row addSubview:slider];
+    [row addSubview:value];
+    objc_setAssociatedObject(slider, kDDPctLabelKey, value, OBJC_ASSOCIATION_ASSIGN);
+
+    // No fixed width on the row → the menu stretches it to the content width,
+    // and the slider grows to fill, so there's no dead space on the right.
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:24],
+        [name.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [name.widthAnchor constraintEqualToConstant:74],
+        [slider.leadingAnchor constraintEqualToAnchor:name.trailingAnchor constant:8],
+        [slider.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [value.leadingAnchor constraintEqualToAnchor:slider.trailingAnchor constant:8],
+        [value.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-14],
+        [value.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [value.widthAnchor constraintGreaterThanOrEqualToConstant:30],
+    ]];
 
     NSMenuItem *item = [[NSMenuItem alloc] init];
     item.view = row;
