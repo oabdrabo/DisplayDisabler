@@ -16,7 +16,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 
 <sub>
 
-[**Features**](#-features) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Requirements**](#-requirements) · [**How it works**](#-how-it-works) · [**Support**](#-support--sponsors) · [**License**](#-license)
+[**Features**](#-features) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Requirements**](#-requirements) · [**How it works**](#-how-it-works) · [**FAQ**](#-faq) · [**Support**](#-support--sponsors) · [**License**](#-license)
 
 </sub>
 
@@ -129,6 +129,23 @@ sa/                   scripting addition injected into Dock (loader.m, payload.m
 tools/                build_icon.m — generates AppIcon.icns
 resources/            Info.plist
 ```
+
+## ❓ FAQ
+
+**Will this harm my Mac?**
+No. It uses Apple's own frameworks (no kernel extensions), and everything it does is reversible — displays re-enable, warmth and brightness reset, windows restore, and quitting the app undoes the live overlays.
+
+**Is the brightness boost real, or just a dimming trick?**
+Real. It's an EDR (extended dynamic range) overlay that drives the panel past its normal 100%, clamped each frame to the display's *actual* headroom — modest on a standard panel, large on an XDR/HDR one. Colors are preserved, and it auto-suspends during Mission Control.
+
+**Why does window transparency need SIP disabled?**
+Making another app's window transparent means injecting a small payload into Dock, which macOS only permits with SIP off plus the `-arm64e_preview_abi` boot-arg. Everything else — display control, HiDPI, brightness, warmth, keep-awake — works on a stock machine.
+
+**Does it run on Intel Macs?**
+No — Apple Silicon only. The boost relies on EDR and the Dock-injection path is arm64e.
+
+**Will updating reset my settings?**
+No. Brightness, warmth, and per-app preferences live in your user defaults and persist across updates.
 
 ## 🤝 Contributing
 
