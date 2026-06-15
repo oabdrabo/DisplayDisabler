@@ -145,8 +145,6 @@ DisplayDeck is free, open-source, and has no tracking or ads. If it's useful to 
   <a href="https://buy.stripe.com/00wbJ2f8J51S9Pv1kh5kk01"><img src="https://img.shields.io/badge/💜%20Sponsor%20monthly-recurring-56c4e6?logo=stripe&logoColor=white" alt="Sponsor monthly via Stripe" height="30" /></a>
 </p>
 
-Backers and supporters will be credited here — thank you! 🙏
-
 ## 📄 License
 
 [MIT](LICENSE) © 2026 Omar Abdrabo
