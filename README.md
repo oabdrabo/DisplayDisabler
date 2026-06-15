@@ -30,27 +30,15 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 
 The menu-bar icon is an interactive **coffee mug**: left-click toggles keep-awake (filled cup = awake), right-click opens the menu.
 
-## 🖱️ The menu
+## 📸 Screenshots
 
-```
- Keep Awake
-   ☕  Keep Awake for           ▸
- ─────────────────────────────────
- Built-in Display
-   ☀  Brightness   ──●─────  100%  Ⓐ
-   🌡  Warmth       ──●─────   30%
-   ▭  Resolution                ▸
-   ⤢  Force HiDPI               ▸
-   ✦  Install Crisp HiDPI…
-   ⏻  Disable
- ─────────────────────────────────
- Transparency
-   Finder    ──●───────  60%   ⏏ 📌
-   All apps  ──────────  100%
- ─────────────────────────────────
-   ⚙  Settings                  ▸
-   ⏻  Quit
-```
+<p align="center">
+  <img src="assets/screenshots/menu.png" width="290" alt="DisplayDisabler menu" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="assets/screenshots/settings.png" width="430" alt="Settings submenu" />
+</p>
+
+Per-display brightness (with inline auto-brightness) and warmth sliders, resolution & Force-HiDPI submenus, per-app transparency with frosted-glass / keep-on-top / picture-in-picture toggles, and a grouped Settings submenu.
 
 ## 📦 Install
 
