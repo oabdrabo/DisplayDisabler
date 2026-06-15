@@ -15,7 +15,7 @@ static const NSTimeInterval kDDVirtualOnlineTimeout = 15.0;
 
 static const double kDDAspectTolerance = 0.005;
 
-static const double kDDHiDPIScales[] = {0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0};
+static const double kDDHiDPIScales[] = {0.5, 0.625, 0.75, 0.875, 1.0};
 static const size_t kDDHiDPIScaleCount = sizeof(kDDHiDPIScales) / sizeof(*kDDHiDPIScales);
 
 typedef struct { uint32_t width; uint32_t height; } SLVirtualDisplaySize;

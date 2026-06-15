@@ -363,10 +363,12 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                                     maxPct:100 continuous:YES tag:display.displayID
                                     action:@selector(warmthSliderChanged:)
                                  accessories:@[]]];
+    NSArray<DDDisplayMode *> *allModes = [self.displayManager modesForDisplay:display.displayID];
+    BOOL hasNativeHiDPI = NO;
+    for (DDDisplayMode *m in allModes) if (m.isHiDPI) { hasNativeHiDPI = YES; break; }
     {
         NSArray<DDDisplayMode *> *modes =
-            [self curatedModes:[self.displayManager modesForDisplay:display.displayID]
-               includeNonHiDPI:[self pref:kShowResolutions]];
+            [self curatedModes:allModes includeNonHiDPI:[self pref:kShowResolutions]];
         size_t lw = display.logicalWidth ?: display.pixelWidth;
         size_t lh = display.logicalHeight ?: display.pixelHeight;
         NSMutableString *rt = [NSMutableString stringWithString:@"Resolution"];
@@ -376,7 +378,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         res.submenu = [self buildModesSubmenuForDisplay:display.displayID modes:modes];
         [menu addItem:res];
     }
-    if (NSClassFromString(@"CGVirtualDisplay") != nil) {
+    if (!hasNativeHiDPI && NSClassFromString(@"CGVirtualDisplay") != nil) {
         NSArray<DDDisplayMode *> *options =
             [self.displayManager forceHiDPIOptionsForDisplay:display.displayID];
         if (options.count > 0) {
@@ -437,31 +439,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [submenu addItem:colHeader];
     [submenu addItem:[NSMenuItem separatorItem]];
 
-    NSMutableArray<DDDisplayMode *> *panelOpts = [NSMutableArray array];
-    NSMutableArray<DDDisplayMode *> *synthOpts = [NSMutableArray array];
-    for (DDDisplayMode *m in options) {
-        if (m.modeRef != NULL) [panelOpts addObject:m];
-        else                   [synthOpts addObject:m];
-    }
-
-    if (panelOpts.count > 0) {
-        NSMenuItem *h = [[NSMenuItem alloc]
-            initWithTitle:@"From panel modes" action:nil keyEquivalent:@""];
-        h.enabled = NO;
-        [submenu addItem:h];
-        [submenu addItem:[NSMenuItem separatorItem]];
-        for (DDDisplayMode *m in panelOpts) [submenu addItem:makeRow(m)];
-    }
-
-    if (synthOpts.count > 0) {
-        if (panelOpts.count > 0) [submenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *h = [[NSMenuItem alloc]
-            initWithTitle:@"Custom sizes" action:nil keyEquivalent:@""];
-        h.enabled = NO;
-        [submenu addItem:h];
-        [submenu addItem:[NSMenuItem separatorItem]];
-        for (DDDisplayMode *m in synthOpts) [submenu addItem:makeRow(m)];
-    }
+    for (DDDisplayMode *m in options) [submenu addItem:makeRow(m)];
 
     return submenu;
 }
@@ -768,16 +746,24 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     NSMutableArray<DDDisplayMode *> *out = [NSMutableArray array];
     NSMutableDictionary<NSString *, NSNumber *> *index = [NSMutableDictionary dictionary];
     for (DDDisplayMode *m in modes) {
-        if (!includeNonHiDPI && !m.isHiDPI && !m.isCurrent) continue;
-        NSString *key = [NSString stringWithFormat:@"%zux%zu_%d_%.0f",
-                         m.logicalWidth, m.logicalHeight, (int)m.isHiDPI, m.refreshRate];
+        if (!m.isCurrent) {
+            if (!includeNonHiDPI && !m.isHiDPI) continue;
+            if (m.logicalWidth < 1024) continue;
+        }
+        NSString *key = [NSString stringWithFormat:@"%zux%zu_%d",
+                         m.logicalWidth, m.logicalHeight, (int)m.isHiDPI];
         NSNumber *at = index[key];
-        if (at) {
-            DDDisplayMode *existing = out[at.unsignedIntegerValue];
-            if (m.pixelWidth > existing.pixelWidth) out[at.unsignedIntegerValue] = m;
-        } else {
+        if (!at) {
             index[key] = @(out.count);
             [out addObject:m];
+            continue;
+        }
+        DDDisplayMode *existing = out[at.unsignedIntegerValue];
+        if (existing.isCurrent) continue;
+        if (m.isCurrent ||
+            m.refreshRate > existing.refreshRate ||
+            (m.refreshRate == existing.refreshRate && m.pixelWidth > existing.pixelWidth)) {
+            out[at.unsignedIntegerValue] = m;
         }
     }
     return out;
