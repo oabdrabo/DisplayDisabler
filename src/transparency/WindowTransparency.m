@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 
-static NSErrorDomain const kTransparencyErrorDomain = @"com.local.DisplayDisabler.Transparency";
+static NSErrorDomain const kTransparencyErrorDomain = @"com.local.DisplayDeck.Transparency";
 
 static const uint8_t kSAOpcodeWindowOpacity = 0x07;
 static const uint8_t kSAOpcodeWindowBlur    = 0x08;
@@ -38,7 +38,7 @@ static const int kMaxBlurRadius = 28;
 }
 
 - (NSString *)socketPath {
-    return [NSString stringWithFormat:@"/tmp/displaydisabler-sa_%@.socket", NSUserName()];
+    return [NSString stringWithFormat:@"/tmp/displaydeck-sa_%@.socket", NSUserName()];
 }
 
 - (int)connectedSocketFD {
@@ -63,7 +63,7 @@ static const int kMaxBlurRadius = 28;
     return YES;
 }
 
-static NSString *const kSALoaderPath = @"/Library/DisplayDisabler/loader";
+static NSString *const kSALoaderPath = @"/Library/DisplayDeck/loader";
 
 - (BOOL)runTask:(NSString *)launchPath args:(NSArray<NSString *> *)args {
     NSTask *task = [[NSTask alloc] init];
@@ -95,7 +95,7 @@ static NSString *shellQuote(NSString *s) {
 }
 
 - (BOOL)installedSAMatchesBundle {
-    NSData *inst = [NSData dataWithContentsOfFile:@"/Library/DisplayDisabler/payload"];
+    NSData *inst = [NSData dataWithContentsOfFile:@"/Library/DisplayDeck/payload"];
     NSData *bund = [NSData dataWithContentsOfFile:
         [[self bundleSADir] stringByAppendingPathComponent:@"payload"]];
     return inst && bund && [inst isEqualToData:bund];
@@ -116,20 +116,20 @@ static NSString *shellQuote(NSString *s) {
     NSString *saDir = [self bundleSADir];
     if (![[NSFileManager defaultManager]
             isReadableFileAtPath:[saDir stringByAppendingPathComponent:@"loader"]]) {
-        NSLog(@"DisplayDisabler: bundled scripting addition missing in %@", saDir);
+        NSLog(@"DisplayDeck: bundled scripting addition missing in %@", saDir);
         return;
     }
 
     NSString *sudoLine = shellQuote([NSString stringWithFormat:
         @"%@ ALL=(root) NOPASSWD: %@", NSUserName(), kSALoaderPath]);
     NSString *cmd = [NSString stringWithFormat:
-        @"mkdir -p /Library/DisplayDisabler && "
-        @"cp %@ /Library/DisplayDisabler/loader && "
-        @"cp %@ /Library/DisplayDisabler/payload && "
-        @"chown -R root:wheel /Library/DisplayDisabler && "
-        @"chmod -R 755 /Library/DisplayDisabler && "
-        @"echo %@ > /etc/sudoers.d/displaydisabler && "
-        @"chmod 440 /etc/sudoers.d/displaydisabler",
+        @"mkdir -p /Library/DisplayDeck && "
+        @"cp %@ /Library/DisplayDeck/loader && "
+        @"cp %@ /Library/DisplayDeck/payload && "
+        @"chown -R root:wheel /Library/DisplayDeck && "
+        @"chmod -R 755 /Library/DisplayDeck && "
+        @"echo %@ > /etc/sudoers.d/displaydeck && "
+        @"chmod 440 /etc/sudoers.d/displaydeck",
         shellQuote([saDir stringByAppendingPathComponent:@"loader"]),
         shellQuote([saDir stringByAppendingPathComponent:@"payload"]),
         sudoLine];
@@ -138,7 +138,7 @@ static NSString *shellQuote(NSString *s) {
         @"do shell script \"%@\" with administrator privileges", DDAppleScriptEscape(cmd)];
     NSDictionary *err = nil;
     [[[NSAppleScript alloc] initWithSource:source] executeAndReturnError:&err];
-    if (err) { NSLog(@"DisplayDisabler: SA install failed: %@", err); return; }
+    if (err) { NSLog(@"DisplayDeck: SA install failed: %@", err); return; }
 
     [self restartDockAndInject];
 }

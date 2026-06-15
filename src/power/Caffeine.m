@@ -45,7 +45,7 @@ static NSString *const kExpiryKey = @"CaffeineExpiry";
         IOReturn r = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleDisplaySleep,
             kIOPMAssertionLevelOn,
-            CFSTR("DisplayDisabler keep awake"),
+            CFSTR("DisplayDeck keep awake"),
             &_assertionID);
         if (r != kIOReturnSuccess) return;
         self.active = YES;

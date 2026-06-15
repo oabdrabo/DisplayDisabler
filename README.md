@@ -1,21 +1,21 @@
 <div align="center">
 
-<img src="assets/icon.png" width="128" alt="DisplayDisabler icon" />
+<img src="assets/icon.png" width="128" alt="DisplayDeck icon" />
 
-# DisplayDisabler
+# DisplayDeck
 
 **A tiny macOS menu-bar app for total control of your Mac's displays.**
 
 Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth · window transparency, blur, keep-on-top & picture-in-picture · keep-awake.
 
-[![Release](https://img.shields.io/badge/release-v2.0.0-2ea44f.svg)](https://github.com/oabdrabo/DisplayDisabler/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.0.0-2ea44f.svg)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14%2B-black.svg?logo=apple)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/arch-Apple%20Silicon-555.svg)](#-requirements)
 [![Made with Objective-C](https://img.shields.io/badge/Objective--C-ARC-438eff.svg)](#-how-it-works)
-[![Website](https://img.shields.io/badge/website-oabdrabo.github.io-635bff.svg)](https://oabdrabo.github.io/DisplayDisabler/)
+[![Website](https://img.shields.io/badge/website-oabdrabo.github.io-635bff.svg)](https://oabdrabo.github.io/DisplayDeck/)
 
-### [🌐 Visit the website →](https://oabdrabo.github.io/DisplayDisabler/)
+### [🌐 Visit the website →](https://oabdrabo.github.io/DisplayDeck/)
 
 <sub>
 
@@ -45,7 +45,7 @@ The menu-bar icon is an interactive **coffee mug**: left-click toggles keep-awak
 
 ## 📸 Screenshots
 
-<p align="center"><img src="assets/demo.gif" width="430" alt="DisplayDisabler quick tour — menu, keep-awake, resolution, Force HiDPI, settings" /></p>
+<p align="center"><img src="assets/demo.gif" width="430" alt="DisplayDeck quick tour — menu, keep-awake, resolution, Force HiDPI, settings" /></p>
 
 It lives in the menu bar as a coffee mug — left-click toggles keep-awake, right-click opens the menu:
 
@@ -71,15 +71,15 @@ Submenus — Keep-Awake durations, the curated **Resolution** picker (★ = pane
 **Homebrew** (cask):
 
 ```sh
-brew install --cask oabdrabo/tap/displaydisabler
+brew install --cask oabdrabo/tap/displaydeck
 ```
 
 <details>
 <summary><b>From source</b></summary>
 
 ```sh
-git clone https://github.com/oabdrabo/DisplayDisabler.git
-cd DisplayDisabler
+git clone https://github.com/oabdrabo/DisplayDeck.git
+cd DisplayDeck
 make install      # builds, ad-hoc signs, copies to /Applications, launches
 ```
 
@@ -92,7 +92,7 @@ It launches at login by default — toggle that under the menu-bar icon → **Se
 ## 🧹 Uninstall
 
 ```sh
-brew uninstall --cask displaydisabler      # if installed via Homebrew
+brew uninstall --cask displaydeck      # if installed via Homebrew
 ```
 
 From source, or to remove the Dock scripting addition installed for transparency:
@@ -139,7 +139,7 @@ Issues, ideas, and PRs are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)*
 
 ## 💖 Support & sponsors
 
-DisplayDisabler is free, open-source, and has no tracking or ads. If it's useful to you, you can support continued development — pay what you like, once or monthly:
+DisplayDeck is free, open-source, and has no tracking or ads. If it's useful to you, you can support continued development — pay what you like, once or monthly:
 
 <p align="center">
   <a href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00"><img src="https://img.shields.io/badge/☕%20Donate%20once-pay%20what%20you%20like-635bff?logo=stripe&logoColor=white" alt="Donate once via Stripe" height="30" /></a>
@@ -156,7 +156,7 @@ MIT — see [LICENSE](LICENSE). Free to use, modify, and distribute.
 <div align="center">
 <br />
 
-**[⬆ back to top](#displaydisabler)**
+**[⬆ back to top](#displaydeck)**
 
 <sub>Built with ☕ on macOS · made for people who like their displays exactly how they want them.</sub>
 

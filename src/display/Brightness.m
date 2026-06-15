@@ -53,7 +53,7 @@ static DSBrightnessFns dsBrightness(void) {
     return f;
 }
 
-static NSErrorDomain const kBrightnessErrorDomain = @"com.local.DisplayDisabler.Brightness";
+static NSErrorDomain const kBrightnessErrorDomain = @"com.local.DisplayDeck.Brightness";
 
 static const uint8_t kDDCChipAddress   = 0x37;
 static const uint8_t kDDCSourceAddress = 0x51;

@@ -3,8 +3,8 @@
 .LSOverride
 *.o
 *.d
-DisplayDisabler
-DisplayDisabler.app/
+DisplayDeck
+DisplayDeck.app/
 sa/bin/
 AppIcon.icns
 AppIcon.iconset/

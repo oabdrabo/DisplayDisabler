@@ -1,5 +1,5 @@
 
-APP_NAME   = DisplayDisabler
+APP_NAME   = DisplayDeck
 BUNDLE     = $(APP_NAME).app
 
 CC         = clang
@@ -92,9 +92,9 @@ zip: all
 uninstall:
 	@rm -rf "/Applications/$(BUNDLE)"
 	@echo "Removed /Applications/$(BUNDLE)"
-	@if [ -e /Library/DisplayDisabler ] || [ -e /etc/sudoers.d/displaydisabler ]; then \
+	@if [ -e /Library/DisplayDeck ] || [ -e /etc/sudoers.d/displaydeck ]; then \
 	    echo "Removing scripting addition (requires admin)…"; \
-	    sudo rm -rf /Library/DisplayDisabler /etc/sudoers.d/displaydisabler && \
+	    sudo rm -rf /Library/DisplayDeck /etc/sudoers.d/displaydeck && \
 	    echo "Removed scripting addition + sudoers entry"; \
 	fi
 

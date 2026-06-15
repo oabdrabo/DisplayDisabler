@@ -7,7 +7,7 @@
 #include <math.h>
 #include <os/log.h>
 
-NSErrorDomain const DDErrorDomain = @"com.local.DisplayDisabler";
+NSErrorDomain const DDErrorDomain = @"com.local.DisplayDeck";
 
 static const NSTimeInterval kDDCoalesceInterval = 0.5;
 
@@ -199,7 +199,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     CGError err = CGBeginDisplayConfiguration(&config);
     if (err != kCGErrorSuccess) {
         os_log(OS_LOG_DEFAULT,
-               "DisplayDisabler: CGBeginDisplayConfiguration → CGError %{public}d", (int)err);
+               "DisplayDeck: CGBeginDisplayConfiguration → CGError %{public}d", (int)err);
         if (error) *error = ddMakeCGError(err, @"Failed to begin display configuration");
         return NO;
     }
@@ -207,7 +207,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     err = block(config);
     if (err != kCGErrorSuccess) {
         os_log(OS_LOG_DEFAULT,
-               "DisplayDisabler: display-config block → CGError %{public}d", (int)err);
+               "DisplayDeck: display-config block → CGError %{public}d", (int)err);
         CGCancelDisplayConfiguration(config);
         if (error) *error = ddMakeCGError(err, @"Display configuration step failed");
         return NO;
@@ -216,7 +216,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     if (err != kCGErrorSuccess) {
         os_log(OS_LOG_DEFAULT,
-               "DisplayDisabler: CGCompleteDisplayConfiguration → CGError %{public}d", (int)err);
+               "DisplayDeck: CGCompleteDisplayConfiguration → CGError %{public}d", (int)err);
         CGCancelDisplayConfiguration(config);
         if (error) *error = ddMakeCGError(err, @"Failed to commit display configuration");
         return NO;
@@ -245,7 +245,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     }
     self.sharedVirtualDisplay = nil;
     [self clearForceState];
-    NSLog(@"DisplayDisabler: Shared virtual display terminated externally.");
+    NSLog(@"DisplayDeck: Shared virtual display terminated externally.");
     [self scheduleChangeNotification];
 }
 
@@ -255,7 +255,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
         return CGConfigureDisplayMirrorOfDisplay(config, displayID, kCGNullDirectDisplay);
     } error:&error];
     if (!ok) {
-        NSLog(@"DisplayDisabler: Warning: failed to unmirror 0x%X: %@", displayID, error);
+        NSLog(@"DisplayDeck: Warning: failed to unmirror 0x%X: %@", displayID, error);
     }
 }
 
@@ -448,8 +448,8 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     }
     NSError *error = nil;                                  // built-in off and nothing real is on → rescue
     BOOL ok = [self enableDisplay:builtIn.displayID error:&error];
-    if (ok) NSLog(@"DisplayDisabler: failsafe re-enabled the built-in display (no real external present)");
-    else NSLog(@"DisplayDisabler: failsafe re-enable failed: %@", error);
+    if (ok) NSLog(@"DisplayDeck: failsafe re-enabled the built-in display (no real external present)");
+    else NSLog(@"DisplayDeck: failsafe re-enable failed: %@", error);
     return ok;
 }
 
@@ -820,7 +820,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
             return CGConfigureDisplayWithDisplayMode(config, virtualID, virtualMode, NULL);
         } error:&pinErr];
         if (!pinned) {
-            NSLog(@"DisplayDisabler: Warning: could not pin virtual mode to %zu\u00D7%zu: %@",
+            NSLog(@"DisplayDeck: Warning: could not pin virtual mode to %zu\u00D7%zu: %@",
                   targetLogicalWidth, targetLogicalHeight, pinErr);
         }
         CGDisplayModeRelease(virtualMode);
@@ -856,7 +856,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
                           physical:displayID online:online toConfig:config];
     } error:&topoErr];
     if (!topoOk) {
-        NSLog(@"DisplayDisabler: Warning: cursor-topology alignment failed: %@", topoErr);
+        NSLog(@"DisplayDeck: Warning: cursor-topology alignment failed: %@", topoErr);
     }
 
     self.forcedPhysical   = displayID;
@@ -864,7 +864,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     self.preForceMode     = preForce;
     self.preForceTopology = topology;
 
-    NSLog(@"DisplayDisabler: Forced HiDPI for display 0x%X at %zu\u00D7%zu via virtual 0x%X",
+    NSLog(@"DisplayDeck: Forced HiDPI for display 0x%X at %zu\u00D7%zu via virtual 0x%X",
           displayID, targetLogicalWidth, targetLogicalHeight, virtualID);
     deliver(YES, nil);
 
@@ -887,13 +887,13 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     CGError err = CGGetDisplayTransferByTable(source, kGammaCapacity,
                                               red, green, blue, &sampleCount);
     if (err != kCGErrorSuccess || sampleCount == 0) {
-        NSLog(@"DisplayDisabler: gamma read from 0x%X failed (%d)", source, err);
+        NSLog(@"DisplayDeck: gamma read from 0x%X failed (%d)", source, err);
         return NO;
     }
 
     err = CGSetDisplayTransferByTable(target, sampleCount, red, green, blue);
     if (err != kCGErrorSuccess) {
-        NSLog(@"DisplayDisabler: gamma write to 0x%X failed (%d)", target, err);
+        NSLog(@"DisplayDeck: gamma write to 0x%X failed (%d)", target, err);
         return NO;
     }
     return YES;
@@ -1072,13 +1072,13 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     } error:&err];
 
     if (!ok) {
-        NSLog(@"DisplayDisabler: Warning: stop transaction failed on 0x%X: %@",
+        NSLog(@"DisplayDeck: Warning: stop transaction failed on 0x%X: %@",
               displayID, err);
     }
 
     [self clearForceState];
 
-    NSLog(@"DisplayDisabler: Stopped forced HiDPI for display 0x%X", displayID);
+    NSLog(@"DisplayDeck: Stopped forced HiDPI for display 0x%X", displayID);
     return ok;
 }
 
@@ -1103,7 +1103,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
         SLVirtualDisplay *vd = self.sharedVirtualDisplay;
         self.sharedVirtualDisplay = nil;
         [vd destroy];
-        NSLog(@"DisplayDisabler: Released shared virtual display.");
+        NSLog(@"DisplayDeck: Released shared virtual display.");
     }
 }
 
@@ -1141,7 +1141,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 
         if (mirrorOK && modeOK && topoOK) return;
 
-        NSLog(@"DisplayDisabler: Realigning forced display after reconfig "
+        NSLog(@"DisplayDeck: Realigning forced display after reconfig "
               @"(mirror=%d mode=%d topology=%d).", mirrorOK, modeOK, topoOK);
 
         if (!mirrorOK) {
@@ -1182,7 +1182,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 
     CGDirectDisplayID did = self.forcedPhysical;
     NSDictionary<NSNumber *, NSValue *> *topology = self.preForceTopology;
-    NSLog(@"DisplayDisabler: Forced display 0x%X disconnected, clearing force state.", did);
+    NSLog(@"DisplayDeck: Forced display 0x%X disconnected, clearing force state.", did);
 
     [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         return [self teardownForcedDisplay:did preForceMode:nil topology:topology

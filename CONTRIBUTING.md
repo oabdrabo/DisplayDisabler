@@ -1,4 +1,4 @@
-# Contributing to DisplayDisabler
+# Contributing to DisplayDeck
 
 Thanks for your interest! Bug reports, ideas, and PRs are all welcome.
 
@@ -8,7 +8,7 @@ Thanks for your interest! Bug reports, ideas, and PRs are all welcome.
 make            # build the .app bundle (arm64 app + arm64e scripting addition)
 make install    # build, ad-hoc sign, copy to /Applications, launch
 make clean      # remove build artifacts
-make zip        # produce DisplayDisabler.app.zip (release artifact)
+make zip        # produce DisplayDeck.app.zip (release artifact)
 ```
 
 You need **Xcode Command Line Tools** (`xcode-select --install`) and **macOS 14+ on Apple Silicon**.
@@ -51,10 +51,10 @@ Because everything here rides on private APIs, behavior can change between macOS
 
 ## Releasing (maintainers)
 
-1. `make zip` → produces `DisplayDisabler.app.zip`.
+1. `make zip` → produces `DisplayDeck.app.zip`.
 2. `gh release create vX.Y.Z --latest --title … --notes …` and upload the zip:
-   `gh release upload vX.Y.Z DisplayDisabler.app.zip`.
+   `gh release upload vX.Y.Z DisplayDeck.app.zip`.
 3. The Homebrew tap (`oabdrabo/homebrew-tap`) auto-bumps its cask — a scheduled
    workflow there detects the new release, recomputes the sha256, and commits.
-   No manual cask edit needed (run its `Update DisplayDisabler cask` workflow
+   No manual cask edit needed (run its `Update DisplayDeck cask` workflow
    manually if you don't want to wait for the schedule).

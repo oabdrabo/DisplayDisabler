@@ -12,7 +12,7 @@ static const size_t kInjectorFullPanelScaleCount =
 
 NS_ASSUME_NONNULL_BEGIN
 
-static NSErrorDomain const kInjectorErrorDomain = @"com.local.DisplayDisabler.HiDPIInjector";
+static NSErrorDomain const kInjectorErrorDomain = @"com.local.DisplayDeck.HiDPIInjector";
 
 static NSString *const kOverridesLibraryRoot =
     @"/Library/Displays/Contents/Resources/Overrides";

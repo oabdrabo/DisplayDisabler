@@ -4,13 +4,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>DisplayDeck</string>
+    <string>DisplayDisabler</string>
 
     <key>CFBundleDisplayName</key>
-    <string>DisplayDeck</string>
+    <string>DisplayDisabler</string>
 
     <key>CFBundleIdentifier</key>
-    <string>com.local.DisplayDeck</string>
+    <string>com.local.DisplayDisabler</string>
 
     <key>CFBundleVersion</key>
     <string>3.0</string>
@@ -19,7 +19,7 @@
     <string>3.0</string>
 
     <key>CFBundleExecutable</key>
-    <string>DisplayDeck</string>
+    <string>DisplayDisabler</string>
 
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
@@ -40,6 +40,6 @@
     <string>6.0</string>
 
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright 2025 DisplayDeck Contributors. MIT License.</string>
+    <string>Copyright 2025 DisplayDisabler Contributors. MIT License.</string>
 </dict>
 </plist>

@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SA_SOCKET_PATH_FMT       "/tmp/displaydisabler-sa_%s.socket"
+#define SA_SOCKET_PATH_FMT       "/tmp/displaydeck-sa_%s.socket"
 #define SA_SOCKET_BUFF_LEN       0x1000
 #define SA_OPCODE_WINDOW_OPACITY 0x07
 #define SA_OPCODE_WINDOW_BLUR    0x08
@@ -103,17 +103,17 @@ static bool start_daemon(const char *socket_path) {
 
 __attribute__((constructor))
 static void load_payload(void) {
-    NSLog(@"[displaydisabler-sa] payload loaded into pid %d", getpid());
+    NSLog(@"[displaydeck-sa] payload loaded into pid %d", getpid());
     const char *user = getenv("USER");
     if (!user) {
-        NSLog(@"[displaydisabler-sa] no USER in env; abort");
+        NSLog(@"[displaydeck-sa] no USER in env; abort");
         return;
     }
     char socket_file[255];
     snprintf(socket_file, sizeof(socket_file), SA_SOCKET_PATH_FMT, user);
     if (start_daemon(socket_file)) {
-        NSLog(@"[displaydisabler-sa] listening on %s", socket_file);
+        NSLog(@"[displaydeck-sa] listening on %s", socket_file);
     } else {
-        NSLog(@"[displaydisabler-sa] failed to start daemon");
+        NSLog(@"[displaydeck-sa] failed to start daemon");
     }
 }

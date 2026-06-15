@@ -170,7 +170,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [UNUserNotificationCenter.currentNotificationCenter
         requestAuthorizationWithOptions:opts
                       completionHandler:^(BOOL granted, NSError *error) {
-        if (error) NSLog(@"DisplayDisabler: Notification auth error: %@", error);
+        if (error) NSLog(@"DisplayDeck: Notification auth error: %@", error);
         if (granted) dispatch_async(dispatch_get_main_queue(), deliver);
     }];
 }
@@ -179,7 +179,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     self.statusItem = [[NSStatusBar systemStatusBar]
                        statusItemWithLength:NSVariableStatusItemLength];
     self.statusItem.button.toolTip =
-        @"DisplayDisabler — click to keep awake, right-click for the menu";
+        @"DisplayDeck — click to keep awake, right-click for the menu";
 
     self.mainMenu = [[NSMenu alloc] init];
     self.mainMenu.autoenablesItems = NO;
@@ -202,7 +202,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                                                         weight:NSFontWeightRegular
                                                          scale:NSImageSymbolScaleMedium];
     NSImage *icon = [[NSImage imageWithSystemSymbolName:symbolName
-                                accessibilityDescription:@"DisplayDisabler"]
+                                accessibilityDescription:@"DisplayDeck"]
                      imageWithSymbolConfiguration:cfg];
     [icon setTemplate:YES];
     self.statusItem.button.image = icon;
@@ -642,7 +642,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     NSError *error = nil;
     if (pid == 0) [[WindowTransparency shared] setAlphaForAllWindows:sender.floatValue error:&error];
     else          [[WindowTransparency shared] setAlpha:sender.floatValue forApp:pid error:&error];
-    if (error) NSLog(@"DisplayDisabler: transparency failed: %@", error);
+    if (error) NSLog(@"DisplayDeck: transparency failed: %@", error);
 }
 
 - (void)toggleAutoBrightness:(NSButton *)sender {
@@ -673,14 +673,14 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [[Brightness shared] setBrightnessPercent:100 forDisplay:did error:&error];
         [[BrightnessBooster shared] setBoost:(float)val forDisplay:did];
     }
-    if (error) NSLog(@"DisplayDisabler: brightness failed: %@", error);
+    if (error) NSLog(@"DisplayDeck: brightness failed: %@", error);
 }
 
 - (void)togglePinApp:(NSButton *)sender {
     NSError *error = nil;
     [[WindowTransparency shared] setPinned:(sender.state == NSControlStateValueOn)
                                     forApp:(pid_t)sender.tag error:&error];
-    if (error) NSLog(@"DisplayDisabler: pin failed: %@", error);
+    if (error) NSLog(@"DisplayDeck: pin failed: %@", error);
 }
 
 - (void)togglePiPApp:(NSButton *)sender {
@@ -698,7 +698,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     (void)sender;
     NSError *error = nil;
     if (![[WindowTransparency shared] resetAllWindows:&error]) {
-        NSLog(@"DisplayDisabler: reset transparency failed: %@", error);
+        NSLog(@"DisplayDeck: reset transparency failed: %@", error);
     }
     [self rebuildMenu];
 }
@@ -842,7 +842,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         }
         [self postNotification:@"Resolution Changed" body:body];
     } else {
-        NSLog(@"DisplayDisabler: Failed to set mode: %@", error);
+        NSLog(@"DisplayDeck: Failed to set mode: %@", error);
         [self postNotification:@"Resolution Change Failed"
                           body:error.localizedDescription];
     }
@@ -874,7 +874,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [self postNotification:@"Display Disabled"
                           body:[NSString stringWithFormat:@"%@ has been disabled.", name]];
     } else {
-        NSLog(@"DisplayDisabler: Failed to disable 0x%X: %@", did, error);
+        NSLog(@"DisplayDeck: Failed to disable 0x%X: %@", did, error);
         [self postNotification:@"Disable Failed"
                           body:error.localizedDescription];
     }
@@ -888,7 +888,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [self postNotification:@"Display Enabled"
                           body:[NSString stringWithFormat:@"%@ has been enabled.", name]];
     } else {
-        NSLog(@"DisplayDisabler: Failed to enable 0x%X: %@", did, error);
+        NSLog(@"DisplayDeck: Failed to enable 0x%X: %@", did, error);
         [self postNotification:@"Enable Failed"
                           body:error.localizedDescription];
     }
@@ -912,7 +912,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
             [strongSelf postNotification:@"HiDPI Forced" body:body];
             [strongSelf rebuildMenu];
         } else {
-            NSLog(@"DisplayDisabler: Failed to force HiDPI for 0x%X: %@", did, error);
+            NSLog(@"DisplayDeck: Failed to force HiDPI for 0x%X: %@", did, error);
             [strongSelf postNotification:@"Force HiDPI Failed"
                                     body:error.localizedDescription];
         }
@@ -930,7 +930,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                                 @"Restored native rendering for %@.", name]];
         [self rebuildMenu];
     } else {
-        NSLog(@"DisplayDisabler: Failed to stop forced HiDPI for 0x%X: %@", did, error);
+        NSLog(@"DisplayDeck: Failed to stop forced HiDPI for 0x%X: %@", did, error);
     }
 }
 
@@ -968,7 +968,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!ok) {
-            NSLog(@"DisplayDisabler: HiDPI install failed: %@", err);
+            NSLog(@"DisplayDeck: HiDPI install failed: %@", err);
             if (err.code != -128) {
                 [strongSelf postNotification:@"Install Failed"
                                         body:err.localizedDescription];
@@ -1000,7 +1000,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!ok) {
-            NSLog(@"DisplayDisabler: HiDPI uninstall failed: %@", err);
+            NSLog(@"DisplayDeck: HiDPI uninstall failed: %@", err);
             if (err.code != -128) {
                 [strongSelf postNotification:@"Remove Failed"
                                         body:err.localizedDescription];
@@ -1030,7 +1030,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         @"tell application \"System Events\" to restart"];
     NSDictionary *asErr = nil;
     [as executeAndReturnError:&asErr];
-    if (asErr) NSLog(@"DisplayDisabler: restart script error: %@", asErr);
+    if (asErr) NSLog(@"DisplayDeck: restart script error: %@", asErr);
 }
 
 - (void)enableLoginItemOnFirstRun {
@@ -1042,7 +1042,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     if (service.status != SMAppServiceStatusEnabled) {
         NSError *error = nil;
         if (![service registerAndReturnError:&error]) {
-            NSLog(@"DisplayDisabler: default login-item registration failed: %@", error);
+            NSLog(@"DisplayDeck: default login-item registration failed: %@", error);
         }
     }
 }
@@ -1053,11 +1053,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     if (service.status == SMAppServiceStatusEnabled) {
         if (![service unregisterAndReturnError:&error]) {
-            NSLog(@"DisplayDisabler: Failed to unregister login item: %@", error);
+            NSLog(@"DisplayDeck: Failed to unregister login item: %@", error);
         }
     } else {
         if (![service registerAndReturnError:&error]) {
-            NSLog(@"DisplayDisabler: Failed to register login item: %@", error);
+            NSLog(@"DisplayDeck: Failed to register login item: %@", error);
             if (service.status == SMAppServiceStatusRequiresApproval) {
                 [SMAppService openSystemSettingsLoginItems];
             }
@@ -1110,7 +1110,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                           body:@"External monitor detected."
                     identifier:kAutoManageNotifID];
     } else {
-        NSLog(@"DisplayDisabler: Auto-disable failed: %@", error);
+        NSLog(@"DisplayDeck: Auto-disable failed: %@", error);
     }
 }
 
@@ -1128,7 +1128,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                           body:@"No external monitor detected."
                     identifier:kAutoManageNotifID];
     } else {
-        NSLog(@"DisplayDisabler: Auto-reenable failed: %@", error);
+        NSLog(@"DisplayDeck: Auto-reenable failed: %@", error);
     }
 }
 
