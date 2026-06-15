@@ -123,4 +123,10 @@ static void axSetSize(AXUIElementRef w, CGSize s) {
     return nowActive;
 }
 
+- (void)restoreAll {
+    for (NSNumber *pidNum in [self.savedFrames allKeys]) {
+        [self toggleForApp:pidNum.intValue];
+    }
+}
+
 @end

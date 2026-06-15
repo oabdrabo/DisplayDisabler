@@ -54,13 +54,13 @@ static NSImage *ddTintedSymbol(NSString *name, NSColor *color) {
             imageWithSymbolConfiguration:cfg];
 }
 
-static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *tabs,
+static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber *> *tabs,
                                      NSFont *font, NSColor *color) {
     NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
     NSMutableArray<NSTextTab *> *stops = [NSMutableArray array];
-    for (NSUInteger i = 0; i + 1 < cols.count; i++) {
+    for (NSUInteger i = 0; i < tabs.count; i++) {
         [stops addObject:[[NSTextTab alloc] initWithType:NSLeftTabStopType
-                                                location:tabs[i]]];
+                                                location:tabs[i].doubleValue]];
     }
     ps.tabStops = stops;
     NSMutableDictionary *attrs = [@{ NSFontAttributeName: font,
@@ -117,6 +117,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
     [[ColorTemperature shared] restoreAll];
+    [[WindowPiP shared] restoreAll];
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
 }
@@ -422,7 +423,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
         item.target = self;
         item.enabled = !isCurrent;
         item.representedObject = @{ @"displayID": @(displayID), @"mode": mode };
-        item.attributedTitle = ddColumns(@[size, rate], (const CGFloat[]){kModeTabType},
+        item.attributedTitle = ddColumns(@[size, rate], @[@(kModeTabType)],
                                          isCurrent ? bold : font, nil);
         if (isCurrent) item.state = NSControlStateValueOn;
         return item;
@@ -430,7 +431,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
 
     NSMenuItem *colHeader = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     colHeader.attributedTitle = ddColumns(@[@"Looks Like", @"Rate"],
-                                          (const CGFloat[]){kModeTabType},
+                                          @[@(kModeTabType)],
                                           bold, [NSColor secondaryLabelColor]);
     colHeader.enabled = NO;
     [submenu addItem:colHeader];
@@ -789,10 +790,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
 
     NSFont *font = [NSFont menuFontOfSize:13];
     NSFont *bold = [NSFont boldSystemFontOfSize:12];
-    const CGFloat tabs[2] = { kModeTabType, kModeTabRate };
 
     NSMenuItem *header = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
-    header.attributedTitle = ddColumns(@[@"Looks Like", @"Type", @"Rate"], tabs,
+    header.attributedTitle = ddColumns(@[@"Looks Like", @"Type", @"Rate"], @[@(kModeTabType), @(kModeTabRate)],
                                        bold, [NSColor secondaryLabelColor]);
     header.enabled = NO;
     [submenu addItem:header];
@@ -811,7 +811,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
         item.target = self;
         item.enabled = !mode.isCurrent;
         item.representedObject = @{ @"mode": mode, @"displayID": @(displayID) };
-        item.attributedTitle = ddColumns(@[logical, type, rate], tabs,
+        item.attributedTitle = ddColumns(@[logical, type, rate], @[@(kModeTabType), @(kModeTabRate)],
                                          mode.isCurrent ? bold : font, nil);
         if (mode.isCurrent) item.state = NSControlStateValueOn;
         [submenu addItem:item];

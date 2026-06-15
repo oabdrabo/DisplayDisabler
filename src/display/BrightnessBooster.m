@@ -144,7 +144,9 @@ static NSScreen *screenForDisplay(CGDirectDisplayID did) {
     CAMetalLayer *ml = [CAMetalLayer layer];
     ml.device = self.device;
     ml.pixelFormat = MTLPixelFormatRGBA16Float;
-    ml.colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    ml.colorspace = cs;
+    CGColorSpaceRelease(cs);
     ml.wantsExtendedDynamicRangeContent = YES;
     ml.framebufferOnly = NO;
     ml.opaque = NO;
