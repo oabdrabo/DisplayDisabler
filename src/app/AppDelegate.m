@@ -362,8 +362,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
                                     maxPct:100 continuous:YES tag:display.displayID
                                     action:@selector(warmthSliderChanged:)
                                  accessories:@[]]];
-    if ([self pref:kShowResolutions]) {
-        NSArray<DDDisplayMode *> *modes = [self.displayManager modesForDisplay:display.displayID];
+    {
+        NSArray<DDDisplayMode *> *modes =
+            [self curatedModes:[self.displayManager modesForDisplay:display.displayID]
+               includeNonHiDPI:[self pref:kShowResolutions]];
         size_t lw = display.logicalWidth ?: display.pixelWidth;
         size_t lh = display.logicalHeight ?: display.pixelHeight;
         NSMutableString *rt = [NSMutableString stringWithString:@"Resolution"];
@@ -732,7 +734,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"General"]];
     [menu addItem:[self checkItemWithTitle:@"Show notifications" key:kShowNotifications]];
     [menu addItem:[self checkItemWithTitle:@"Confirm before disabling" key:kConfirmDisable]];
-    [menu addItem:[self checkItemWithTitle:@"Show all resolutions" key:kShowResolutions]];
+    [menu addItem:[self checkItemWithTitle:@"Show non-HiDPI resolutions" key:kShowResolutions]];
 
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Display"]];
     [menu addItem:[self checkItemWithTitle:@"Turn off built-in with external display"
@@ -758,6 +760,26 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, const CGFloat *t
     item.representedObject = key;
     item.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
     return item;
+}
+
+- (NSArray<DDDisplayMode *> *)curatedModes:(NSArray<DDDisplayMode *> *)modes
+                           includeNonHiDPI:(BOOL)includeNonHiDPI {
+    NSMutableArray<DDDisplayMode *> *out = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSNumber *> *index = [NSMutableDictionary dictionary];
+    for (DDDisplayMode *m in modes) {
+        if (!includeNonHiDPI && !m.isHiDPI && !m.isCurrent) continue;
+        NSString *key = [NSString stringWithFormat:@"%zux%zu_%d_%.0f",
+                         m.logicalWidth, m.logicalHeight, (int)m.isHiDPI, m.refreshRate];
+        NSNumber *at = index[key];
+        if (at) {
+            DDDisplayMode *existing = out[at.unsignedIntegerValue];
+            if (m.pixelWidth > existing.pixelWidth) out[at.unsignedIntegerValue] = m;
+        } else {
+            index[key] = @(out.count);
+            [out addObject:m];
+        }
+    }
+    return out;
 }
 
 - (NSMenu *)buildModesSubmenuForDisplay:(CGDirectDisplayID)displayID

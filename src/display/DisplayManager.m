@@ -405,10 +405,11 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     CFRelease(allModes);
 
     [result sortUsingComparator:^NSComparisonResult(DDDisplayMode *a, DDDisplayMode *b) {
-        if (a.pixelWidth  != b.pixelWidth)  return (a.pixelWidth  < b.pixelWidth)  ? NSOrderedDescending : NSOrderedAscending;
-        if (a.pixelHeight != b.pixelHeight) return (a.pixelHeight < b.pixelHeight) ? NSOrderedDescending : NSOrderedAscending;
-        if (a.isHiDPI     != b.isHiDPI)     return a.isHiDPI ? NSOrderedAscending : NSOrderedDescending;
-        if (a.refreshRate != b.refreshRate) return (a.refreshRate < b.refreshRate) ? NSOrderedDescending : NSOrderedAscending;
+        if (a.logicalWidth  != b.logicalWidth)  return (a.logicalWidth  < b.logicalWidth)  ? NSOrderedDescending : NSOrderedAscending;
+        if (a.logicalHeight != b.logicalHeight) return (a.logicalHeight < b.logicalHeight) ? NSOrderedDescending : NSOrderedAscending;
+        if (a.isHiDPI       != b.isHiDPI)       return a.isHiDPI ? NSOrderedAscending : NSOrderedDescending;
+        if (a.refreshRate   != b.refreshRate)   return (a.refreshRate   < b.refreshRate)   ? NSOrderedDescending : NSOrderedAscending;
+        if (a.pixelWidth    != b.pixelWidth)    return (a.pixelWidth    < b.pixelWidth)    ? NSOrderedDescending : NSOrderedAscending;
         return NSOrderedSame;
     }];
 
