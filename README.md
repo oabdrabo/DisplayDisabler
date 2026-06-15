@@ -13,10 +13,13 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 [![Platform](https://img.shields.io/badge/macOS-14%2B-black.svg?logo=apple)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/arch-Apple%20Silicon-555.svg)](#-requirements)
 [![Made with Objective-C](https://img.shields.io/badge/Objective--C-ARC-438eff.svg)](#-how-it-works)
+[![Website](https://img.shields.io/badge/website-oabdrabo.github.io-635bff.svg)](https://oabdrabo.github.io/DisplayDisabler/)
+
+### [🌐 Visit the website →](https://oabdrabo.github.io/DisplayDisabler/)
 
 <sub>
 
-[**Features**](#-features) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Requirements**](#-requirements) · [**How it works**](#-how-it-works) · [**Contributing**](#-contributing) · [**License**](#-license)
+[**Features**](#-features) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Requirements**](#-requirements) · [**How it works**](#-how-it-works) · [**Support**](#-support--sponsors) · [**License**](#-license)
 
 </sub>
 
@@ -134,10 +137,12 @@ Issues, ideas, and PRs are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)*
 
 ## 💖 Support & sponsors
 
-DisplayDisabler is free, open-source, and has no tracking or ads. If it's useful to you, you can support continued development — pay what you like:
+DisplayDisabler is free, open-source, and has no tracking or ads. If it's useful to you, you can support continued development — pay what you like, once or monthly:
 
 <p align="center">
-  <a href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00"><img src="https://img.shields.io/badge/Donate-pay%20what%20you%20like-635bff?logo=stripe&logoColor=white" alt="Donate via Stripe" height="28" /></a>
+  <a href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00"><img src="https://img.shields.io/badge/☕%20Donate%20once-pay%20what%20you%20like-635bff?logo=stripe&logoColor=white" alt="Donate once via Stripe" height="30" /></a>
+  &nbsp;
+  <a href="https://buy.stripe.com/00wbJ2f8J51S9Pv1kh5kk01"><img src="https://img.shields.io/badge/💜%20Sponsor%20monthly-recurring-56c4e6?logo=stripe&logoColor=white" alt="Sponsor monthly via Stripe" height="30" /></a>
 </p>
 
 Backers and supporters will be credited here — thank you! 🙏

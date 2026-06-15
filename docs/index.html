@@ -24,7 +24,7 @@
     --maxw:1120px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html{scroll-behavior:smooth}
+  html{scroll-behavior:smooth;overflow-x:hidden}
   body{
     background:var(--ink);color:var(--text);font-family:var(--body);
     line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;
@@ -61,7 +61,7 @@
     background:radial-gradient(60% 80% at 22% 30%,var(--warm-soft),transparent 70%),
                radial-gradient(55% 80% at 85% 18%,var(--cool-soft),transparent 70%);
     filter:blur(8px);}
-  .hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center}
+  .hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:48px;align-items:center}
   .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.12em;
     text-transform:uppercase;color:var(--cool);margin-bottom:22px;
     display:inline-flex;gap:10px;align-items:center}
@@ -96,7 +96,7 @@
     margin-left:auto;max-height:560px;width:auto}
   .shot-hero::after{content:"";position:absolute;inset:auto 0 -30px 0;height:60px;
     background:radial-gradient(50% 100% at 70% 0,var(--warm-soft),transparent);filter:blur(10px);z-index:-1}
-  @media(max-width:860px){.hero-grid{grid-template-columns:1fr;gap:40px}
+  @media(max-width:860px){.hero-grid{grid-template-columns:minmax(0,1fr);gap:40px}
     .shot-hero img{margin:0 auto;max-height:480px}}
 
   /* ---- section scaffold ---- */
@@ -143,7 +143,7 @@
   @media(max-width:620px){.spec .row{grid-template-columns:1fr;gap:6px}}
 
   /* ---- install ---- */
-  .install-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:30px}
+  .install-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;margin-bottom:30px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px}
   .card h3{font-family:var(--display);font-weight:600;font-size:18px;margin-bottom:14px;
     display:flex;align-items:center;gap:10px}
@@ -161,8 +161,10 @@
     color:#1a1205;font-weight:700;border-radius:11px;padding:13px 22px;font-size:14.5px;
     transition:transform .15s,box-shadow .15s}
   .donate:hover{transform:translateY(-1px);box-shadow:0 12px 30px -12px var(--warm)}
-  .donate-row span{color:var(--muted);font-size:14px}
-  @media(max-width:700px){.install-grid{grid-template-columns:1fr}}
+  .donate.alt{background:transparent;color:var(--text);border:1px solid var(--cool);box-shadow:none}
+  .donate.alt:hover{box-shadow:0 12px 30px -16px var(--cool)}
+  .donate-row span{color:var(--muted);font-size:14px;flex-basis:100%}
+  @media(max-width:700px){.install-grid{grid-template-columns:minmax(0,1fr)}}
 
   /* ---- footer ---- */
   footer{padding:54px 0 70px;border-top:1px solid var(--line);margin-top:30px}
@@ -321,7 +323,8 @@
       <span class="pill">Transparency &amp; blur need SIP off + -arm64e_preview_abi</span>
     </div>
     <div class="donate-row reveal">
-      <a class="donate" href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00">☕ Support development</a>
+      <a class="donate" href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00">☕ Donate once</a>
+      <a class="donate alt" href="https://buy.stripe.com/00wbJ2f8J51S9Pv1kh5kk01">💜 Sponsor monthly</a>
       <span>Free, open-source, no ads — pay what you like if it's useful.</span>
     </div>
   </div>

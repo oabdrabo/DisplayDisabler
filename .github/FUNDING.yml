@@ -1,2 +1,2 @@
-# Adds the repo's "Sponsor" button — points to the Stripe pay-what-you-like donate page.
-custom: ["https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00"]
+# Adds the repo's "Sponsor" button — Stripe pay-what-you-like (one-time) + monthly.
+custom: ["https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00", "https://buy.stripe.com/00wbJ2f8J51S9Pv1kh5kk01"]
