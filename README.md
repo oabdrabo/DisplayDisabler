@@ -2,7 +2,7 @@
 
 A tiny macOS **menu-bar app** for MacBook display control, built on private CoreGraphics / SkyLight APIs — a lightweight alternative to large commercial display utilities.
 
-[![License](https://img.shields.io/github/license/oabdrabo/DisplayDisabler)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Features
 
