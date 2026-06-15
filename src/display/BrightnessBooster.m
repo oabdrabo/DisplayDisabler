@@ -155,7 +155,7 @@ static NSScreen *screenForDisplay(CGDirectDisplayID did) {
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO
                                                  screen:screen];
-    w.level = NSScreenSaverWindowLevel;
+    w.level = NSModalPanelWindowLevel;
     w.opaque = NO;
     w.backgroundColor = [NSColor clearColor];
     w.ignoresMouseEvents = YES;
