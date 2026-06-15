@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DisplayDisabler — total control of your Mac's displays</title>
+<meta name="description" content="A tiny macOS menu-bar app: disable screens, force HiDPI, boost brightness past 100%, warm the colors, make any window transparent or float, and keep your Mac awake. Free & open source, Apple Silicon." />
+<meta property="og:title" content="DisplayDisabler" />
+<meta property="og:description" content="Total control of your Mac's displays — from one coffee mug in your menu bar." />
+<meta property="og:image" content="assets/icon.png" />
+<link rel="icon" type="image/png" href="assets/icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#13151a; --panel:#1a1d24; --panel2:#20242d; --line:#2b303b;
+    --text:#eceef2; --muted:#888f9e; --faint:#5b6270;
+    --warm:#f0a24a; --cool:#56c4e6;
+    --warm-soft:rgba(240,162,74,.14); --cool-soft:rgba(86,196,230,.14);
+    --display:"Bricolage Grotesque",system-ui,sans-serif;
+    --body:"Inter",system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+    --maxw:1120px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--ink);color:var(--text);font-family:var(--body);
+    line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  img{max-width:100%;display:block}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* warmth thread — the signature: a color-temperature slider as a divider */
+  .thread{height:2px;border:0;width:100%;
+    background:linear-gradient(90deg,#f0a24a,#f6c06b,#ece7df 48%,#9fd9ee,#56c4e6);
+    opacity:.5;}
+
+  /* ---- faux macOS menu bar ---- */
+  .menubar{position:sticky;top:0;z-index:50;
+    display:flex;align-items:center;gap:22px;
+    height:38px;padding:0 18px;
+    background:rgba(19,21,26,.72);backdrop-filter:blur(18px) saturate(140%);
+    border-bottom:1px solid var(--line);font-size:13px;}
+  .menubar .glyph{width:15px;height:15px;border-radius:4px;
+    background:conic-gradient(from 210deg,var(--warm),var(--cool));}
+  .menubar nav{display:flex;gap:20px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .menubar nav a:hover{color:var(--text)}
+  .menubar .spacer{flex:1}
+  .menubar .status{display:flex;align-items:center;gap:14px;
+    font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .menubar .mug{display:flex;align-items:center;gap:7px;color:var(--warm)}
+  .menubar .mug img{width:16px;height:16px;filter:drop-shadow(0 0 6px var(--warm-soft))}
+  @media(max-width:680px){.menubar nav{display:none}}
+
+  /* ---- hero ---- */
+  .hero{position:relative;padding:96px 0 64px}
+  .hero::before{content:"";position:absolute;inset:-20% -10% auto -10%;height:520px;z-index:-1;
+    background:radial-gradient(60% 80% at 22% 30%,var(--warm-soft),transparent 70%),
+               radial-gradient(55% 80% at 85% 18%,var(--cool-soft),transparent 70%);
+    filter:blur(8px);}
+  .hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--cool);margin-bottom:22px;
+    display:inline-flex;gap:10px;align-items:center}
+  .eyebrow::before{content:"";width:26px;height:1px;background:var(--cool);opacity:.7}
+  h1{font-family:var(--display);font-weight:800;line-height:1.02;letter-spacing:-.02em;
+    font-size:clamp(40px,6.4vw,72px);}
+  h1 .warm{color:var(--warm)}
+  .lede{color:var(--muted);font-size:clamp(16px,1.7vw,19px);margin:24px 0 32px;max-width:30em}
+  .cta{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  .brew{display:flex;align-items:center;gap:0;border:1px solid var(--line);
+    border-radius:11px;background:var(--panel);overflow:hidden;font-family:var(--mono);font-size:13.5px}
+  .brew{max-width:100%}
+  .brew code{padding:13px 16px;color:var(--text);white-space:nowrap;min-width:0;overflow-x:auto}
+  .brew code .sigil{color:var(--cool)}
+  .brew button{flex:0 0 auto;border:0;border-left:1px solid var(--line);background:var(--panel2);
+    color:var(--muted);padding:13px 16px;cursor:pointer;font-family:var(--mono);font-size:12px;
+    letter-spacing:.04em;transition:color .15s,background .15s}
+  .brew button:hover{color:var(--text);background:#262b35}
+  .brew button.copied{color:var(--warm)}
+  .btn{display:inline-flex;align-items:center;gap:9px;border-radius:11px;padding:13px 20px;
+    font-weight:600;font-size:14.5px;border:1px solid var(--line);background:transparent;
+    transition:border-color .15s,transform .15s}
+  .btn:hover{border-color:var(--cool);transform:translateY(-1px)}
+  .btn svg{width:17px;height:17px}
+  .meta{margin-top:26px;font-family:var(--mono);font-size:12px;color:var(--faint);
+    display:flex;gap:18px;flex-wrap:wrap}
+  .meta b{color:var(--muted);font-weight:500}
+
+  .shot-hero{position:relative}
+  .shot-hero img{border-radius:14px;border:1px solid var(--line);
+    box-shadow:0 40px 80px -30px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.02);
+    margin-left:auto;max-height:560px;width:auto}
+  .shot-hero::after{content:"";position:absolute;inset:auto 0 -30px 0;height:60px;
+    background:radial-gradient(50% 100% at 70% 0,var(--warm-soft),transparent);filter:blur(10px);z-index:-1}
+  @media(max-width:860px){.hero-grid{grid-template-columns:1fr;gap:40px}
+    .shot-hero img{margin:0 auto;max-height:480px}}
+
+  /* ---- section scaffold ---- */
+  section{padding:84px 0}
+  .head{max-width:34em;margin-bottom:46px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:14px}
+  h2{font-family:var(--display);font-weight:700;letter-spacing:-.018em;
+    font-size:clamp(28px,3.6vw,40px);line-height:1.08}
+  .head p{color:var(--muted);margin-top:14px;font-size:16.5px}
+
+  /* ---- features ---- */
+  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .feat{background:var(--panel);padding:30px 26px 32px;position:relative;transition:background .2s}
+  .feat:hover{background:var(--panel2)}
+  .feat .tag{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--cool);
+    display:block;margin-bottom:18px}
+  .feat:nth-child(3n-1) .tag,.feat:nth-child(4) .tag,.feat:nth-child(5) .tag{color:var(--warm)}
+  .feat h3{font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.01em;margin-bottom:9px}
+  .feat p{color:var(--muted);font-size:14.5px;line-height:1.55}
+  @media(max-width:860px){.feats{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.feats{grid-template-columns:1fr}}
+
+  /* ---- gallery ---- */
+  .gallery{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .gallery figure{background:var(--panel);border:1px solid var(--line);border-radius:13px;
+    padding:14px 14px 0;overflow:hidden;display:flex;flex-direction:column}
+  .gallery img{border-radius:8px 8px 0 0;width:100%;height:300px;object-fit:cover;object-position:top}
+  .gallery figcaption{font-family:var(--mono);font-size:11.5px;color:var(--faint);
+    padding:13px 2px 15px;letter-spacing:.03em}
+  @media(max-width:860px){.gallery{grid-template-columns:1fr 1fr}}
+  @media(max-width:480px){.gallery{grid-template-columns:1fr}}
+
+  /* ---- spec / how it works ---- */
+  .spec{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--panel)}
+  .spec .row{display:grid;grid-template-columns:200px 1fr;gap:24px;padding:20px 26px;
+    border-bottom:1px solid var(--line);align-items:baseline}
+  .spec .row:last-child{border-bottom:0}
+  .spec .what{font-family:var(--display);font-weight:600;font-size:16px}
+  .spec .api{font-family:var(--mono);font-size:13.5px;color:var(--muted)}
+  .spec .api b{color:var(--cool);font-weight:500}
+  .spec-note{font-family:var(--mono);font-size:12.5px;color:var(--faint);margin-top:20px}
+  @media(max-width:620px){.spec .row{grid-template-columns:1fr;gap:6px}}
+
+  /* ---- install ---- */
+  .install-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:30px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px}
+  .card h3{font-family:var(--display);font-weight:600;font-size:18px;margin-bottom:14px;
+    display:flex;align-items:center;gap:10px}
+  .card pre{background:var(--ink);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;font-family:var(--mono);font-size:13px;color:var(--text);
+    overflow-x:auto;line-height:1.7}
+  .card pre .sigil{color:var(--cool)}
+  .card pre .cmt{color:var(--faint)}
+  .card p{color:var(--muted);font-size:14px;margin-top:14px}
+  .reqs{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);
+    border:1px solid var(--line);border-radius:999px;padding:7px 14px}
+  .donate-row{margin-top:34px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .donate{display:inline-flex;align-items:center;gap:9px;background:linear-gradient(90deg,var(--warm),#f6b86a);
+    color:#1a1205;font-weight:700;border-radius:11px;padding:13px 22px;font-size:14.5px;
+    transition:transform .15s,box-shadow .15s}
+  .donate:hover{transform:translateY(-1px);box-shadow:0 12px 30px -12px var(--warm)}
+  .donate-row span{color:var(--muted);font-size:14px}
+  @media(max-width:700px){.install-grid{grid-template-columns:1fr}}
+
+  /* ---- footer ---- */
+  footer{padding:54px 0 70px;border-top:1px solid var(--line);margin-top:30px}
+  .foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+  .foot .brand{display:flex;align-items:center;gap:12px;font-family:var(--display);font-weight:700}
+  .foot .brand img{width:30px;height:30px}
+  .foot nav{display:flex;gap:22px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .foot nav a:hover{color:var(--text)}
+  .foot .fineprint{width:100%;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:8px}
+
+  /* ---- reveal motion ---- */
+  .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s ease,transform .7s ease}
+  .reveal.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    .reveal{opacity:1;transform:none;transition:none}
+    .btn:hover,.donate:hover,.shot-hero img{transform:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- faux macOS menu bar -->
+<div class="menubar">
+  <span class="glyph" aria-hidden="true"></span>
+  <nav>
+    <a href="#features">Features</a>
+    <a href="#screens">Screenshots</a>
+    <a href="#how">How it works</a>
+    <a href="#install">Install</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="status">
+    <span>100%&nbsp;6500K</span>
+    <span class="mug"><img src="assets/icon.png" alt="" />awake</span>
+  </span>
+</div>
+
+<!-- hero -->
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div class="reveal in">
+      <span class="eyebrow">macOS menu-bar app · Apple Silicon · open source</span>
+      <h1>Total control of your <span class="warm">Mac's displays.</span></h1>
+      <p class="lede">Disable screens, force crisp HiDPI, push brightness past 100%, warm the colors, make any window float or go transparent — and keep your Mac awake. All from one coffee mug in your menu bar.</p>
+      <div class="cta">
+        <div class="brew">
+          <code id="brewcmd"><span class="sigil">$</span> brew install --cask oabdrabo/tap/displaydisabler</code>
+          <button id="copybtn" aria-label="Copy install command">Copy</button>
+        </div>
+        <a class="btn" href="https://github.com/oabdrabo/DisplayDisabler">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          GitHub
+        </a>
+      </div>
+      <div class="meta">
+        <span><b>Free &amp; MIT</b></span>
+        <span><b>Under 1 MB</b></span>
+        <span><b>No telemetry</b></span>
+        <span><b>macOS 14+</b></span>
+      </div>
+    </div>
+    <div class="shot-hero reveal in">
+      <img src="assets/screenshots/menu.png" alt="DisplayDisabler menu showing brightness and warmth sliders and per-app transparency controls" />
+    </div>
+  </div>
+</header>
+
+<hr class="thread" />
+
+<!-- features -->
+<section id="features">
+  <div class="wrap">
+    <div class="head reveal">
+      <div class="kicker">What it does</div>
+      <h2>Six tools, one menu.</h2>
+      <p>Each one leans on a private macOS framework to do something the system settings won't let you.</p>
+    </div>
+    <div class="feats reveal">
+      <div class="feat"><span class="tag">DISPLAY</span><h3>Disable any screen</h3><p>Turn off the built-in panel in clamshell or headless setups so it stays dark when the lid opens. Auto-disable on external connect — with a failsafe that re-enables it if a disconnect would leave you with no usable screen.</p></div>
+      <div class="feat"><span class="tag">SCALING</span><h3>Force HiDPI</h3><p>Add crisp, retina-scaled resolutions to displays that don't natively offer them, plus a "More Space" supersampling tier and optional persistent override plists.</p></div>
+      <div class="feat"><span class="tag">LIGHT</span><h3>Brightness + EDR boost</h3><p>Built-in and external brightness, an inline auto-brightness toggle, and a real boost above 100% — clamped to your panel's learned headroom, colors preserved.</p></div>
+      <div class="feat"><span class="tag">COLOR</span><h3>Warmth</h3><p>A per-display color-temperature slider, f.lux style: neutral 6500&nbsp;K down to a warm ~3400&nbsp;K via gamma ramps. Restores native color at zero.</p></div>
+      <div class="feat"><span class="tag">WINDOWS</span><h3>Transparency, float &amp; PiP</h3><p>Set any app's opacity, add frosted-glass blur, keep a window on top, or shrink one into a still-usable floating corner.</p></div>
+      <div class="feat"><span class="tag">POWER</span><h3>Keep awake</h3><p>An IOKit caffeine assertion so your Mac and its display won't sleep — indefinitely, or for a duration you pick. Left-click the mug to toggle.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- screenshots -->
+<section id="screens" style="padding-top:0">
+  <div class="wrap">
+    <div class="head reveal">
+      <div class="kicker">A look inside</div>
+      <h2>Native, dense, no clutter.</h2>
+      <p>Real captures — the menu lives where every other menu-bar app does, and the submenus stay out of your way until you need them.</p>
+    </div>
+    <div class="gallery reveal">
+      <figure><img src="assets/screenshots/keepawake.png" alt="Keep-awake duration submenu" /><figcaption>keep-awake durations</figcaption></figure>
+      <figure><img src="assets/screenshots/resolution.png" alt="Curated resolution picker" /><figcaption>resolution picker · ★ native</figcaption></figure>
+      <figure><img src="assets/screenshots/forcehidpi.png" alt="Force HiDPI sizes submenu" /><figcaption>force HiDPI · more space</figcaption></figure>
+      <figure><img src="assets/screenshots/settings.png" alt="Settings submenu" /><figcaption>grouped settings</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<hr class="thread" />
+
+<!-- how it works -->
+<section id="how">
+  <div class="wrap">
+    <div class="head reveal">
+      <div class="kicker">Under the hood</div>
+      <h2>Built on the frameworks Apple doesn't document.</h2>
+      <p>No bundled binaries, no daemon, nothing phoned home — just direct calls into private CoreGraphics, SkyLight and DisplayServices APIs.</p>
+    </div>
+    <div class="spec reveal">
+      <div class="row"><span class="what">Disable display</span><span class="api"><b>CGSConfigureDisplayEnabled</b> — flips a screen off at the window-server level</span></div>
+      <div class="row"><span class="what">Force HiDPI</span><span class="api">mirrors the panel onto a private <b>SLVirtualDisplay</b> + writes display-override plists</span></div>
+      <div class="row"><span class="what">Warmth</span><span class="api"><b>CGSetDisplayTransferByTable</b> — per-channel gamma ramps</span></div>
+      <div class="row"><span class="what">Brightness boost</span><span class="api">a borderless <b>CAMetalLayer</b> EDR overlay, clamped each frame to live headroom</span></div>
+      <div class="row"><span class="what">Transparency &amp; blur</span><span class="api">a scripting addition injected into Dock calling <b>SLSSetWindowAlpha</b> over a private socket</span></div>
+      <div class="row"><span class="what">Picture-in-Picture</span><span class="api">resizes the real window through the Accessibility API (<b>AXUIElement</b>)</span></div>
+    </div>
+    <p class="spec-note">// Because these are private APIs, behavior can change between macOS releases.</p>
+  </div>
+</section>
+
+<hr class="thread" />
+
+<!-- install -->
+<section id="install">
+  <div class="wrap">
+    <div class="head reveal">
+      <div class="kicker">Get it</div>
+      <h2>Two ways in.</h2>
+    </div>
+    <div class="install-grid reveal">
+      <div class="card">
+        <h3>Homebrew</h3>
+        <pre><span class="sigil">$</span> brew install --cask \
+    oabdrabo/tap/displaydisabler</pre>
+        <p>The cask installs to <code>/Applications</code> and clears the Gatekeeper flag for you. Update any time with <code>brew upgrade --cask displaydisabler</code>.</p>
+      </div>
+      <div class="card">
+        <h3>From source</h3>
+        <pre><span class="cmt"># needs Xcode command-line tools</span>
+<span class="sigil">$</span> git clone https://github.com/oabdrabo/DisplayDisabler
+<span class="sigil">$</span> cd DisplayDisabler && make install</pre>
+        <p>Builds, ad-hoc signs, copies to <code>/Applications</code>, and launches. Starts at login by default.</p>
+      </div>
+    </div>
+    <div class="reqs reveal">
+      <span class="pill">macOS 14+</span>
+      <span class="pill">Apple Silicon</span>
+      <span class="pill">Transparency &amp; blur need SIP off + -arm64e_preview_abi</span>
+    </div>
+    <div class="donate-row reveal">
+      <a class="donate" href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00">☕ Support development</a>
+      <span>Free, open-source, no ads — pay what you like if it's useful.</span>
+    </div>
+  </div>
+</section>
+
+<!-- footer -->
+<footer>
+  <div class="wrap foot">
+    <span class="brand"><img src="assets/icon.png" alt="" />DisplayDisabler</span>
+    <nav>
+      <a href="https://github.com/oabdrabo/DisplayDisabler">GitHub</a>
+      <a href="https://github.com/oabdrabo/DisplayDisabler/releases/latest">Releases</a>
+      <a href="https://github.com/oabdrabo/DisplayDisabler/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://donate.stripe.com/3cI6oI7Gh1PG0eV8MJ5kk00">Donate</a>
+    </nav>
+    <p class="fineprint">MIT licensed · built with ☕ on macOS · not affiliated with Apple. Made by <a href="https://github.com/oabdrabo" style="color:var(--muted)">@oabdrabo</a>.</p>
+  </div>
+</footer>
+
+<script>
+  // copy install command
+  const btn=document.getElementById('copybtn');
+  btn.addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText('brew install --cask oabdrabo/tap/displaydisabler');
+      btn.textContent='Copied';btn.classList.add('copied');
+      setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('copied')},1600);
+    }catch(e){btn.textContent='⌘C';}
+  });
+  // scroll reveal
+  const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12});
+  document.querySelectorAll('.reveal:not(.in)').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
