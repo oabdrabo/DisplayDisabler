@@ -15,8 +15,6 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 [![Made with Objective-C](https://img.shields.io/badge/Objective--C-ARC-438eff.svg)](#-how-it-works)
 [![Website](https://img.shields.io/badge/website-oabdrabo.github.io-635bff.svg)](https://oabdrabo.github.io/DisplayDeck/)
 
-### [🌐 Visit the website →](https://oabdrabo.github.io/DisplayDeck/)
-
 <sub>
 
 [**Features**](#-features) · [**Screenshots**](#-screenshots) · [**Install**](#-install) · [**Requirements**](#-requirements) · [**How it works**](#-how-it-works) · [**Support**](#-support--sponsors) · [**License**](#-license)
@@ -151,13 +149,4 @@ Backers and supporters will be credited here — thank you! 🙏
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE). Free to use, modify, and distribute.
-
-<div align="center">
-<br />
-
-**[⬆ back to top](#displaydeck)**
-
-<sub>Built with ☕ on macOS · made for people who like their displays exactly how they want them.</sub>
-
-</div>
+[MIT](LICENSE) © 2026 Omar Abdrabo
