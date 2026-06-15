@@ -40,3 +40,13 @@ See the [Project layout](README.md#%EF%B8%8F-project-layout) section of the READ
 3. Verify it builds (`make`) and the features you touched still work end-to-end.
 
 Because everything here rides on private APIs, behavior can change between macOS releases — real-device verification matters more than usual. Thanks for helping keep it solid.
+
+## Releasing (maintainers)
+
+1. `make zip` → produces `DisplayDisabler.app.zip`.
+2. `gh release create vX.Y.Z --latest --title … --notes …` and upload the zip:
+   `gh release upload vX.Y.Z DisplayDisabler.app.zip`.
+3. The Homebrew tap (`oabdrabo/homebrew-tap`) auto-bumps its cask — a scheduled
+   workflow there detects the new release, recomputes the sha256, and commits.
+   No manual cask edit needed (run its `Update DisplayDisabler cask` workflow
+   manually if you don't want to wait for the schedule).
