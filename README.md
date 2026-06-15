@@ -53,13 +53,21 @@ Submenus — Keep-Awake durations, the curated **Resolution** picker (★ = pane
 
 ## 📦 Install
 
+**Homebrew** (cask):
+
+```sh
+brew install --cask oabdrabo/tap/displaydisabler
+```
+
+**From source:**
+
 ```sh
 git clone https://github.com/oabdrabo/DisplayDisabler.git
 cd DisplayDisabler
 make install      # builds, ad-hoc signs, copies to /Applications, launches
 ```
 
-Needs Xcode Command Line Tools (`xcode-select --install`). It launches at login by default — toggle that under the menu-bar icon → **Settings → Launch at Login**.
+From source needs Xcode Command Line Tools (`xcode-select --install`). It launches at login by default — toggle that under the menu-bar icon → **Settings → Launch at Login**.
 
 ## ⚙️ Requirements
 
