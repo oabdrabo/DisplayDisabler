@@ -59,6 +59,7 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 - (NSString *)nameForDisplayID:(CGDirectDisplayID)displayID;
 - (nullable DDDisplayInfo *)builtInDisplay;
 - (BOOL)hasExternalDisplay;
+- (BOOL)recoverStrandedBuiltIn;
 - (CGSize)nativePanelPixelsForDisplay:(CGDirectDisplayID)displayID;
 
 - (BOOL)disableDisplay:(CGDirectDisplayID)displayID error:(NSError **)error;

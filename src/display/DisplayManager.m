@@ -423,14 +423,34 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     return nil;
 }
 
+- (BOOL)isRealExternal:(CGDirectDisplayID)did {
+    if (CGDisplayIsBuiltin(did)) return NO;
+    if ([self isVirtualDisplayID:did]) return NO;
+    if (CGDisplayVendorNumber(did) == 0) return NO;   // phantom / generic "Display" entry, no EDID
+    return YES;
+}
+
 - (BOOL)hasExternalDisplay {
     for (NSNumber *didNum in ddQueryDisplayList(CGGetOnlineDisplayList)) {
-        CGDirectDisplayID did = didNum.unsignedIntValue;
-        if (CGDisplayIsBuiltin(did)) continue;
-        if ([self isVirtualDisplayID:did]) continue;
-        return YES;
+        if ([self isRealExternal:didNum.unsignedIntValue]) return YES;
     }
     return NO;
+}
+
+- (BOOL)recoverStrandedBuiltIn {
+    DDDisplayInfo *builtIn = [self builtInDisplay];
+    if (!builtIn || builtIn.isActive) return NO;          // built-in present & on → fine
+    for (NSNumber *didNum in ddQueryDisplayList(CGGetActiveDisplayList)) {
+        CGDirectDisplayID did = didNum.unsignedIntValue;
+        if (![self isRealExternal:did]) continue;
+        if (CGDisplayIsAsleep(did)) continue;
+        return NO;                                         // a real external is actually showing
+    }
+    NSError *error = nil;                                  // built-in off and nothing real is on → rescue
+    BOOL ok = [self enableDisplay:builtIn.displayID error:&error];
+    if (ok) NSLog(@"DisplayDisabler: failsafe re-enabled the built-in display (no real external present)");
+    else NSLog(@"DisplayDisabler: failsafe re-enable failed: %@", error);
+    return ok;
 }
 
 - (void)enumerateStandardModesForDisplay:(CGDirectDisplayID)displayID

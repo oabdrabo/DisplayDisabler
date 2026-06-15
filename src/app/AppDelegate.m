@@ -109,8 +109,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [strongSelf rebuildMenu];
         [strongSelf performAutoDisableIfNeeded];
         [strongSelf performAutoReenableIfNeeded];
+        [strongSelf.displayManager recoverStrandedBuiltIn];
     }];
 
+    [self.displayManager recoverStrandedBuiltIn];
     [self performAutoDisableIfNeeded];
 }
 
