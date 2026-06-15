@@ -6,7 +6,7 @@
 
 **A tiny macOS menu-bar app for total control of your Mac's displays.**
 
-Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth · window transparency, blur, keep-on-top & picture-in-picture · keep-awake — a free, lightweight alternative to the big commercial display utilities.
+Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth · window transparency, blur, keep-on-top & picture-in-picture · keep-awake.
 
 [![Release](https://img.shields.io/badge/release-v2.0.0-2ea44f.svg)](https://github.com/oabdrabo/DisplayDisabler/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -25,7 +25,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 ---
 
 > [!NOTE]
-> **One mug in your menu bar replaces a stack of paid utilities** — display disabling, retina-scaling tools, brightness/HDR boosters, f.lux-style warmth, window-transparency hacks, and KeepingYouAwake — in a single, under-1 MB native app with no telemetry, no subscription, and no background daemon. It's built entirely on Apple's own (private) frameworks; nothing is bundled or phoned home.
+> **One mug in your menu bar instead of a stack of paid utilities** — free and open-source, under 1 MB, with no telemetry, no subscription, and no background daemon. Built entirely on Apple's own (private) frameworks; nothing is bundled or phoned home.
 
 ## ✨ Features
 
