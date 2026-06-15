@@ -47,13 +47,17 @@ static BOOL fullScreenSystemOverlayActive(CGDirectDisplayID displayID) {
         if (!drawable) return;
 
         if (self.pollCounter-- <= 0) {
-            self.pollCounter = 10;
-            self.suspended = fullScreenSystemOverlayActive(self.displayID);
+            self.pollCounter = 6;
+            BOOL sys = fullScreenSystemOverlayActive(self.displayID);
+            if (sys != self.suspended) {
+                self.suspended = sys;
+                self.window.alphaValue = sys ? 0.0 : 1.0;
+            }
         }
 
         NSScreen *s = screenForDisplay(self.displayID);
         float headroom = s ? (float)s.maximumExtendedDynamicRangeColorComponentValue : 1.0f;
-        float eff = self.suspended ? 1.0f : MIN(self.boost, headroom + kHeadroomProbeStep);
+        float eff = MIN(self.boost, headroom + kHeadroomProbeStep);
         if (eff < 1.0f) eff = 1.0f;
         self.presented = eff;
 
