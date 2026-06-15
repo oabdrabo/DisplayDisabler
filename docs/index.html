@@ -86,6 +86,8 @@
     transition:border-color .15s,transform .15s}
   .btn:hover{border-color:var(--cool);transform:translateY(-1px)}
   .btn svg{width:17px;height:17px}
+  .btn.download{background:var(--warm);border-color:var(--warm);color:#1a1205;font-weight:700}
+  .btn.download:hover{border-color:var(--warm);box-shadow:0 12px 30px -12px var(--warm)}
   .meta{margin-top:26px;font-family:var(--mono);font-size:12px;color:var(--faint);
     display:flex;gap:18px;flex-wrap:wrap}
   .meta b{color:var(--muted);font-weight:500}
@@ -211,6 +213,10 @@
       <h1>Total control of your <span class="warm">Mac's displays.</span></h1>
       <p class="lede">Disable screens, force crisp HiDPI, push brightness past 100%, warm the colors, make any window float or go transparent — and keep your Mac awake. All from one coffee mug in your menu bar.</p>
       <div class="cta">
+        <a class="btn download" href="https://github.com/oabdrabo/DisplayDisabler/releases/latest/download/DisplayDisabler.app.zip">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v6.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L7 8.59V2a1 1 0 0 1 1-1Zm-5 12a1 1 0 1 0 0 2h10a1 1 0 1 0 0-2H3Z"/></svg>
+          Download for Mac
+        </a>
         <div class="brew">
           <code id="brewcmd"><span class="sigil">$</span> brew install --cask oabdrabo/tap/displaydisabler</code>
           <button id="copybtn" aria-label="Copy install command">Copy</button>
