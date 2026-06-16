@@ -524,6 +524,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     NSTextField *name = [NSTextField labelWithString:label];
     name.font = [NSFont menuFontOfSize:13];
     name.translatesAutoresizingMaskIntoConstraints = NO;
+    [name setContentHuggingPriority:NSLayoutPriorityRequired
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [name setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
     [row addSubview:name];
 
     NSTextField *field = [[NSTextField alloc] init];
@@ -543,8 +547,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [row.heightAnchor constraintEqualToConstant:30],
         [name.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
         [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [name.widthAnchor constraintEqualToConstant:52],
-        [field.leadingAnchor constraintEqualToAnchor:name.trailingAnchor constant:6],
+        [field.leadingAnchor constraintEqualToAnchor:name.trailingAnchor constant:8],
         [field.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-14],
         [field.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
     ]];
