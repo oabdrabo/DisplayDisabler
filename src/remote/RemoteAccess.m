@@ -7,7 +7,7 @@ static NSString *const kRelayHostKey = @"RemoteRelayHost";
 static NSString *const kRelayUserKey = @"RemoteRelayUser";
 static NSString *const kRelayPortKey = @"RemoteRelayPort";
 
-static NSString *const kDefaultRelayHost = @"167.86.85.128";
+static NSString *const kDefaultRelayHost = @"";          // unset by default — user configures
 static NSString *const kDefaultRelayUser = @"tunnel";
 static NSString *const kDefaultRelayPort = @"22";
 
@@ -89,6 +89,42 @@ static NSString *const kDefaultRelayPort = @"22";
             self.relayUser, self.relayHost, NSUserName(), self.sshPort];
 }
 
+- (NSString *)authorizeLine {
+    return [NSString stringWithFormat:
+        @"restrict,port-forwarding,permitlisten=\"%d\",permitlisten=\"%d\","
+        @"permitopen=\"localhost:%d\",permitopen=\"localhost:%d\" %@",
+        self.sshPort, self.vncPort, self.sshPort, self.vncPort, self.publicKey ?: @""];
+}
+
+- (BOOL)isConfigured { return self.relayHost.length > 0; }
+
+- (void)setRelayHost:(NSString *)host {
+    [[NSUserDefaults standardUserDefaults] setObject:(host ?: @"") forKey:kRelayHostKey];
+    [self reconnect];
+}
+- (void)setRelayUser:(NSString *)user {
+    [[NSUserDefaults standardUserDefaults] setObject:(user.length ? user : kDefaultRelayUser) forKey:kRelayUserKey];
+    [self reconnect];
+}
+- (void)setRelayPort:(NSString *)port {
+    [[NSUserDefaults standardUserDefaults] setObject:(port.length ? port : kDefaultRelayPort) forKey:kRelayPortKey];
+    [self reconnect];
+}
+
+// Pick up new relay settings live: drop the current tunnel; the termination
+// handler relaunches it (reading the fresh config). No-op if not enabled.
+- (void)reconnect {
+    if (!self.isEnabled) return;
+    dispatch_async(self.q, ^{
+        self.backoff = 2.0;
+        if (self.task.isRunning) {
+            @try { [self.task terminate]; } @catch (__unused NSException *e) {}
+        } else {
+            [self launchTunnelLocked];
+        }
+    });
+}
+
 #pragma mark - Enable / disable
 
 - (void)enable {
@@ -141,6 +177,7 @@ static NSString *const kDefaultRelayPort = @"22";
 
 - (void)launchTunnelLocked {
     if (!self.isEnabled) return;
+    if (self.relayHost.length == 0) return;   // not configured yet
     if (self.task.isRunning) return;
 
     NSTask *t = [[NSTask alloc] init];

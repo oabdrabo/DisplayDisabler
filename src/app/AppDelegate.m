@@ -483,25 +483,81 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [sm addItem:toggle];
 
     if (ra.isEnabled) {
-        [sm addItem:[NSMenuItem separatorItem]];
-        NSString *st = ra.isConnected
-            ? [NSString stringWithFormat:@"● Connected · relay port %d", ra.sshPort]
-            : @"○ Connecting…";
+        NSString *st = !ra.isConfigured ? @"⚠ Set a relay host below"
+            : (ra.isConnected ? [NSString stringWithFormat:@"● Connected · relay port %d", ra.sshPort]
+                              : @"○ Connecting…");
         NSMenuItem *status = [[NSMenuItem alloc] initWithTitle:st action:nil keyEquivalent:@""];
         status.enabled = NO;
         [sm addItem:status];
-        NSMenuItem *cc = [[NSMenuItem alloc] initWithTitle:@"Copy connect command"
-            action:@selector(copyRemoteConnect:) keyEquivalent:@""];
-        cc.target = self; cc.image = ddSymbol(@"terminal");
-        [sm addItem:cc];
-        NSMenuItem *ck = [[NSMenuItem alloc] initWithTitle:@"Copy public key"
-            action:@selector(copyRemoteKey:) keyEquivalent:@""];
-        ck.target = self; ck.image = ddSymbol(@"key");
-        [sm addItem:ck];
     }
+
+    // ---- Relay settings (editable) ----
+    [sm addItem:[NSMenuItem separatorItem]];
+    [sm addItem:[NSMenuItem sectionHeaderWithTitle:@"Relay"]];
+    [sm addItem:[self relayItem:[NSString stringWithFormat:@"Host:  %@",
+                    ra.relayHost.length ? ra.relayHost : @"(not set)"]
+                         action:@selector(editRelayHost:)]];
+    [sm addItem:[self relayItem:[NSString stringWithFormat:@"User:  %@", ra.relayUser]
+                         action:@selector(editRelayUser:)]];
+    [sm addItem:[self relayItem:[NSString stringWithFormat:@"SSH port:  %@", ra.relayPort]
+                         action:@selector(editRelayPort:)]];
+
+    // ---- Copy helpers ----
+    [sm addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *cc = [[NSMenuItem alloc] initWithTitle:@"Copy connect command"
+        action:@selector(copyRemoteConnect:) keyEquivalent:@""];
+    cc.target = self; cc.image = ddSymbol(@"terminal"); [sm addItem:cc];
+    NSMenuItem *ck = [[NSMenuItem alloc] initWithTitle:@"Copy public key"
+        action:@selector(copyRemoteKey:) keyEquivalent:@""];
+    ck.target = self; ck.image = ddSymbol(@"key"); [sm addItem:ck];
+    NSMenuItem *al = [[NSMenuItem alloc] initWithTitle:@"Copy relay authorize line"
+        action:@selector(copyRemoteAuthLine:) keyEquivalent:@""];
+    al.target = self; al.image = ddSymbol(@"checkmark.shield"); [sm addItem:al];
 
     root.submenu = sm;
     [menu addItem:root];
+}
+
+- (NSMenuItem *)relayItem:(NSString *)title action:(SEL)action {
+    NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
+    it.target = self;
+    return it;
+}
+
+// Small modal text prompt (accessory app — activate first so it takes focus).
+- (NSString *)promptValue:(NSString *)info default:(NSString *)def {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"DisplayDeck — Remote Access";
+    alert.informativeText = info;
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 24)];
+    field.stringValue = def ?: @"";
+    alert.accessoryView = field;
+    [alert addButtonWithTitle:@"Save"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [NSApp activateIgnoringOtherApps:YES];
+    NSModalResponse r = [alert runModal];
+    if (r != NSAlertFirstButtonReturn) return nil;
+    return [field.stringValue stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)editRelayHost:(id)sender {
+    (void)sender;
+    NSString *v = [self promptValue:@"Relay host — an IP or domain you control (your always-on box):"
+                            default:[RemoteAccess shared].relayHost];
+    if (v) { [[RemoteAccess shared] setRelayHost:v]; [self rebuildMenu]; }
+}
+- (void)editRelayUser:(id)sender {
+    (void)sender;
+    NSString *v = [self promptValue:@"Relay SSH user (the forwarding-only account, e.g. tunnel):"
+                            default:[RemoteAccess shared].relayUser];
+    if (v) { [[RemoteAccess shared] setRelayUser:v]; [self rebuildMenu]; }
+}
+- (void)editRelayPort:(id)sender {
+    (void)sender;
+    NSString *v = [self promptValue:@"Relay SSH port (usually 22):"
+                            default:[RemoteAccess shared].relayPort];
+    if (v) { [[RemoteAccess shared] setRelayPort:v]; [self rebuildMenu]; }
 }
 
 - (void)toggleRemoteAccess:(id)sender {
@@ -511,19 +567,13 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [self rebuildMenu];
 }
 
-- (void)copyRemoteConnect:(id)sender {
-    (void)sender;
+- (void)copyToPasteboard:(NSString *)s {
     [[NSPasteboard generalPasteboard] clearContents];
-    [[NSPasteboard generalPasteboard] setString:[RemoteAccess shared].connectCommand
-                                        forType:NSPasteboardTypeString];
+    [[NSPasteboard generalPasteboard] setString:(s ?: @"") forType:NSPasteboardTypeString];
 }
-
-- (void)copyRemoteKey:(id)sender {
-    (void)sender;
-    NSString *k = [RemoteAccess shared].publicKey ?: @"";
-    [[NSPasteboard generalPasteboard] clearContents];
-    [[NSPasteboard generalPasteboard] setString:k forType:NSPasteboardTypeString];
-}
+- (void)copyRemoteConnect:(id)sender  { (void)sender; [self copyToPasteboard:[RemoteAccess shared].connectCommand]; }
+- (void)copyRemoteKey:(id)sender      { (void)sender; [self copyToPasteboard:[RemoteAccess shared].publicKey]; }
+- (void)copyRemoteAuthLine:(id)sender { (void)sender; [self copyToPasteboard:[RemoteAccess shared].authorizeLine]; }
 
 - (void)addDisplaySectionToMenu:(NSMenu *)menu display:(DDDisplayInfo *)display {
     BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];

@@ -24,7 +24,15 @@ NS_ASSUME_NONNULL_BEGIN
 - (int)vncPort;                          // relay loopback port → this Mac's 5900
 - (NSString *)relayHost;
 - (NSString *)relayUser;
+- (NSString *)relayPort;
 - (NSString *)connectCommand;            // copy-paste command to reach this Mac
+- (NSString *)authorizeLine;             // forwarding-only authorized_keys line for the relay
+- (BOOL)isConfigured;                    // a relay host is set
+
+// Configure the relay (persisted; reconnects live if enabled).
+- (void)setRelayHost:(NSString *)host;
+- (void)setRelayUser:(NSString *)user;
+- (void)setRelayPort:(NSString *)port;
 
 // Restore on launch if previously enabled.
 - (void)restoreIfEnabled;
