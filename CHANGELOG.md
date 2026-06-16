@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.2.1] — 2026-06-16
+
+### Changed
+- **Text smoothing** is now an inline segmented control (Off · Light · Medium · Strong) in the main menu, instead of a submenu — one click, with the active level always visible.
+
 ## [2.2.0] — 2026-06-16
 
 ### Added
@@ -37,6 +42,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.2.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.2.1
 [2.2.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.2.0
 [2.1.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.1.0
 [2.0.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.0.0
