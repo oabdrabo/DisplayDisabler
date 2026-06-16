@@ -329,7 +329,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Window"]];
     [self addWindowSectionToMenu:menu];
 
-    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Remote"]];
     [self addRemoteSectionToMenu:menu];
 
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
@@ -492,12 +491,26 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)addRemoteSectionToMenu:(NSMenu *)menu {
     RemoteAccess *ra = [RemoteAccess shared];
 
-    // ---- Top level: the on/off switch + the client ----
-    [menu addItem:[self switchRow:@"Remote Access" icon:@"network"
-                               on:ra.isEnabled action:@selector(remoteSwitchToggled:)]];
-    [menu addItem:[self remoteConnectItem]];
+    // One "Remote Access ▸" submenu holding the toggle, the client, and Relay.
+    NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"Remote Access"
+                                                  action:nil keyEquivalent:@""];
+    root.image = ddSymbol(@"network");
+    NSMenu *m = [[NSMenu alloc] init];
+    m.autoenablesItems = NO;
 
-    // ---- Everything else (relay config, status, key) in a Relay submenu ----
+    [m addItem:[self switchRow:@"Enabled" icon:@"network"
+                            on:ra.isEnabled action:@selector(remoteSwitchToggled:)]];
+    [m addItem:[NSMenuItem separatorItem]];
+    [m addItem:[self remoteConnectItem]];
+    [m addItem:[self remoteRelayItem]];
+
+    root.submenu = m;
+    [menu addItem:root];
+}
+
+// "Relay ▸" — endpoint field, status, this Mac's ports, and the key to authorize.
+- (NSMenuItem *)remoteRelayItem {
+    RemoteAccess *ra = [RemoteAccess shared];
     NSMenuItem *relayItem = [[NSMenuItem alloc] initWithTitle:@"Relay"
                                                        action:nil keyEquivalent:@""];
     relayItem.image = ddSymbol(@"server.rack");
@@ -527,7 +540,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [rm addItem:key];
 
     relayItem.submenu = rm;
-    [menu addItem:relayItem];
+    return relayItem;
 }
 
 // "Connect to a Mac ▸" — the real client. Peers are auto-discovered from the relay.
