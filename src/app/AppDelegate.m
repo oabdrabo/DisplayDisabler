@@ -347,15 +347,16 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)addWindowSectionToMenu:(NSMenu *)menu {
     if (![[WindowManager shared] hasAccessibility]) {
         NSMenuItem *grant = [[NSMenuItem alloc]
-            initWithTitle:@"Enable window snapping (Accessibility)…"
+            initWithTitle:@"Enable Snapping…"
                    action:@selector(grantWindowAccess:) keyEquivalent:@""];
         grant.target = self;
         grant.image = ddSymbol(@"macwindow.badge.plus");
+        grant.toolTip = @"Grant Accessibility permission to snap windows";
         [menu addItem:grant];
         return;
     }
 
-    NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"Snap Focused Window"
+    NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"Snap Window"
                                                   action:nil keyEquivalent:@""];
     root.image = ddSymbol(@"macwindow.on.rectangle");
     NSMenu *sm = [[NSMenu alloc] init];

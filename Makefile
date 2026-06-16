@@ -24,11 +24,29 @@ OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
 
+# Stable code-signing identity. A local self-signed cert keeps the app's code
+# identity (and therefore TCC grants like Accessibility) constant across rebuilds —
+# ad-hoc signing changes the cdhash every build, which silently invalidates the
+# grant. Falls back to ad-hoc if the cert isn't present (CI / other machines).
+# Recreate with: make signing-identity
+SIGN_KEYCHAIN    = $(HOME)/Library/Keychains/displaydeck-signing.keychain-db
+SIGN_KEYCHAIN_PW = displaydeck
+SIGN_ID := $(shell security find-identity -p codesigning "$(SIGN_KEYCHAIN)" 2>/dev/null | grep -o "DisplayDeck Self-Signed" | head -1)
+ifeq ($(strip $(SIGN_ID)),)
+CODESIGN_ID  = -
+CODESIGN_KC  =
+SIGN_LABEL   = ad-hoc
+else
+CODESIGN_ID  = DisplayDeck Self-Signed
+CODESIGN_KC  = --keychain "$(SIGN_KEYCHAIN)"
+SIGN_LABEL   = DisplayDeck Self-Signed (stable)
+endif
+
 SA_DIR     = sa
 SA_FLAGS   = -O2 -arch arm64e -mmacosx-version-min=11.0
 SA_BIN     = $(SA_DIR)/bin
 
-.PHONY: all clean bundle sign install uninstall icon sa zip
+.PHONY: all clean bundle sign install uninstall icon sa zip signing-identity
 
 all: bundle sign
 
@@ -75,9 +93,29 @@ bundle: $(EXECUTABLE) AppIcon.icns sa
 	@echo "Built $(BUNDLE)"
 
 sign: bundle
-	@codesign --force --sign - "$(BUNDLE)/Contents/MacOS/$(EXECUTABLE)"
-	@codesign --force --sign - "$(BUNDLE)"
-	@echo "Signed $(BUNDLE) (ad-hoc)"
+	@if [ "$(CODESIGN_ID)" != "-" ]; then \
+	    security unlock-keychain -p "$(SIGN_KEYCHAIN_PW)" "$(SIGN_KEYCHAIN)" 2>/dev/null || true; fi
+	@codesign --force --sign "$(CODESIGN_ID)" $(CODESIGN_KC) "$(BUNDLE)/Contents/MacOS/$(EXECUTABLE)"
+	@codesign --force --sign "$(CODESIGN_ID)" $(CODESIGN_KC) "$(BUNDLE)"
+	@echo "Signed $(BUNDLE) ($(SIGN_LABEL))"
+
+# One-time: create the local self-signed code-signing identity. Survives rebuilds,
+# so the Accessibility (and other TCC) grants stick instead of re-prompting.
+signing-identity:
+	@OSSL=$$(command -v /opt/homebrew/bin/openssl || command -v openssl); \
+	KC="$(SIGN_KEYCHAIN)"; PW="$(SIGN_KEYCHAIN_PW)"; \
+	security delete-keychain "$$KC" 2>/dev/null || true; \
+	security create-keychain -p "$$PW" "$$KC"; \
+	security set-keychain-settings "$$KC"; \
+	security unlock-keychain -p "$$PW" "$$KC"; \
+	printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=DisplayDeck Self-Signed\n[v3]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' > /tmp/dd.cnf; \
+	$$OSSL req -x509 -newkey rsa:2048 -keyout /tmp/dd.key -out /tmp/dd.crt -days 7300 -nodes -config /tmp/dd.cnf -extensions v3 2>/dev/null; \
+	$$OSSL pkcs12 -export -legacy -inkey /tmp/dd.key -in /tmp/dd.crt -out /tmp/dd.p12 -name "DisplayDeck Self-Signed" -passout pass:"$$PW" 2>/dev/null; \
+	security import /tmp/dd.p12 -k "$$KC" -P "$$PW" -T /usr/bin/codesign -A; \
+	security set-key-partition-list -S apple-tool:,apple:,unsigned: -s -k "$$PW" "$$KC" >/dev/null 2>&1; \
+	EX=$$(security list-keychains -d user | sed 's/"//g' | xargs); security list-keychains -d user -s "$$KC" $$EX; \
+	rm -f /tmp/dd.key /tmp/dd.crt /tmp/dd.p12 /tmp/dd.cnf; \
+	echo "Created signing identity:"; security find-identity -p codesigning "$$KC"
 
 install: all
 	@rm -rf "/Applications/$(BUNDLE)"

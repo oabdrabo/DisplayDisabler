@@ -2,6 +2,12 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.3.1] — 2026-06-16
+
+### Fixed
+- **Accessibility no longer re-prompts after every update.** The app now signs with a stable code-signing identity instead of ad-hoc. An ad-hoc signature changes identity (cdhash) on every build, which silently invalidated the Accessibility grant that window snapping and Picture-in-Picture rely on — even though System Settings still showed it enabled. With a stable identity the grant persists across updates.
+- **The "Window" menu no longer widens the menu** — its labels are now compact ("Snap Window", "Enable Snapping…") so the section fits the standard menu width.
+
 ## [2.3.0] — 2026-06-16
 
 ### Added
@@ -57,6 +63,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.3.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.1
 [2.3.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.0
 [2.2.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.2.2
 [2.2.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.2.1
