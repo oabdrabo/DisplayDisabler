@@ -37,6 +37,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 | 🌡️ **Warmth** | Per-display color-temperature slider (f.lux / Night-Shift style) via gamma ramps — 6500 K neutral → ~3400 K warm, persisted, restores native ColorSync at 0%. |
 | 🪟 **Window transparency** | Set per-app or all-window opacity for **any** app, via a self-contained scripting addition injected into Dock (no external tools). Optional **frosted-glass blur**, per-app **Keep on top**, and **Picture-in-Picture** (shrink a window into a still-usable floating corner). |
 | ☕ **Keep awake** | An IOKit caffeine assertion so the Mac and its display don't sleep — indefinitely or for a set duration. Replaces KeepingYouAwake. |
+| 🔤 **Text smoothing** | Adjust macOS's grayscale antialiasing (Off → Strong) so text isn't thin or fuzzy on external, non-Retina, or scaled monitors. Global; applies after a re-login. |
 
 The menu-bar icon is an interactive **coffee mug**: left-click toggles keep-awake (filled cup = awake), right-click opens the menu.
 
