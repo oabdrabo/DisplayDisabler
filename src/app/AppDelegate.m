@@ -515,22 +515,49 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         : @"○ Connecting…";
     [self addLabelToMenu:menu title:[@"   " stringByAppendingString:st]];
 
-    // Copy helpers in a compact submenu (secondary actions).
-    NSMenuItem *copy = [[NSMenuItem alloc] initWithTitle:@"Copy" action:nil keyEquivalent:@""];
-    copy.image = ddSymbol(@"doc.on.doc");
-    NSMenu *cm = [[NSMenu alloc] init];
-    cm.autoenablesItems = NO;
-    NSMenuItem *cc = [[NSMenuItem alloc] initWithTitle:@"Connect command"
-        action:@selector(copyRemoteConnect:) keyEquivalent:@""];
-    cc.target = self; cc.image = ddSymbol(@"terminal"); [cm addItem:cc];
-    NSMenuItem *ck = [[NSMenuItem alloc] initWithTitle:@"Public key"
-        action:@selector(copyRemoteKey:) keyEquivalent:@""];
-    ck.target = self; ck.image = ddSymbol(@"key"); [cm addItem:ck];
-    NSMenuItem *al = [[NSMenuItem alloc] initWithTitle:@"Relay authorize line"
+    // Real client: connect to your *other* Macs through the relay.
+    NSMenuItem *connect = [[NSMenuItem alloc] initWithTitle:@"Connect to a Mac"
+                                                     action:nil keyEquivalent:@""];
+    connect.image = ddSymbol(@"display.2");
+    NSMenu *con = [[NSMenu alloc] init];
+    con.autoenablesItems = NO;
+    NSArray<NSDictionary *> *peers = [RemoteAccess shared].peers;
+    [peers enumerateObjectsUsingBlock:^(NSDictionary *peer, NSUInteger i, BOOL *stop) {
+        (void)stop;
+        NSMenuItem *pm = [[NSMenuItem alloc] initWithTitle:peer[@"name"] action:nil keyEquivalent:@""];
+        pm.image = ddSymbol(@"macbook");
+        NSMenu *ps = [[NSMenu alloc] init];
+        ps.autoenablesItems = NO;
+        NSMenuItem *ss = [[NSMenuItem alloc] initWithTitle:@"Screen Share"
+            action:@selector(connectScreenShare:) keyEquivalent:@""];
+        ss.target = self; ss.image = ddSymbol(@"display"); ss.representedObject = peer;
+        [ps addItem:ss];
+        NSMenuItem *sh = [[NSMenuItem alloc] initWithTitle:@"SSH (Terminal)"
+            action:@selector(connectSSH:) keyEquivalent:@""];
+        sh.target = self; sh.image = ddSymbol(@"terminal"); sh.representedObject = peer;
+        [ps addItem:sh];
+        [ps addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *rm = [[NSMenuItem alloc] initWithTitle:@"Remove"
+            action:@selector(removeRemotePeer:) keyEquivalent:@""];
+        rm.target = self; rm.representedObject = @(i);
+        [ps addItem:rm];
+        pm.submenu = ps;
+        [con addItem:pm];
+    }];
+    if (peers.count) [con addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *add = [[NSMenuItem alloc] initWithTitle:@"Add a Mac…"
+        action:@selector(addRemotePeer:) keyEquivalent:@""];
+    add.target = self; add.image = ddSymbol(@"plus");
+    [con addItem:add];
+    connect.submenu = con;
+    [menu addItem:connect];
+
+    // The one genuinely useful copy: this Mac's forwarding-only key line, to
+    // authorize it on the relay (paste into kk0s config/tunnel-authorized-keys).
+    NSMenuItem *key = [[NSMenuItem alloc] initWithTitle:@"Copy this Mac's relay key"
         action:@selector(copyRemoteAuthLine:) keyEquivalent:@""];
-    al.target = self; al.image = ddSymbol(@"checkmark.shield"); [cm addItem:al];
-    copy.submenu = cm;
-    [menu addItem:copy];
+    key.target = self; key.image = ddSymbol(@"key");
+    [menu addItem:key];
 }
 
 // Inline "<label>  [switch]" row — an NSSwitch like a Settings toggle. Shared by
@@ -651,13 +678,51 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [ra setRelayHost:[self trimmed:host] user:[self trimmed:(user ?: @"")] port:port];
 }
 
-- (void)copyToPasteboard:(NSString *)s {
+- (void)copyRemoteAuthLine:(id)sender {
+    (void)sender;
     [[NSPasteboard generalPasteboard] clearContents];
-    [[NSPasteboard generalPasteboard] setString:(s ?: @"") forType:NSPasteboardTypeString];
+    [[NSPasteboard generalPasteboard] setString:([RemoteAccess shared].authorizeLine ?: @"")
+                                        forType:NSPasteboardTypeString];
 }
-- (void)copyRemoteConnect:(id)sender  { (void)sender; [self copyToPasteboard:[RemoteAccess shared].connectCommand]; }
-- (void)copyRemoteKey:(id)sender      { (void)sender; [self copyToPasteboard:[RemoteAccess shared].publicKey]; }
-- (void)copyRemoteAuthLine:(id)sender { (void)sender; [self copyToPasteboard:[RemoteAccess shared].authorizeLine]; }
+
+- (void)connectScreenShare:(NSMenuItem *)sender {
+    [[RemoteAccess shared] screenSharePeer:sender.representedObject];
+}
+- (void)connectSSH:(NSMenuItem *)sender {
+    [[RemoteAccess shared] sshPeer:sender.representedObject];
+}
+- (void)removeRemotePeer:(NSMenuItem *)sender {
+    [[RemoteAccess shared] removePeerAtIndex:[sender.representedObject unsignedIntegerValue]];
+    [self rebuildMenu];
+}
+
+// Add-a-Mac is a rare, one-time action, so a single prompt is fine here.
+- (void)addRemotePeer:(id)sender {
+    (void)sender;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Add a Mac";
+    alert.informativeText = @"Enter: name  SSH-port  Screen-Share-port  [login user]\n"
+                            @"(the ports are that Mac's “relay port” from its DisplayDeck.)";
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
+    field.placeholderString = @"MacBook 22596 24596 omar";
+    alert.accessoryView = field;
+    [alert addButtonWithTitle:@"Add"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [NSApp activateIgnoringOtherApps:YES];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (NSString *p in [field.stringValue componentsSeparatedByCharactersInSet:
+                         [NSCharacterSet whitespaceCharacterSet]]) {
+        if (p.length) [parts addObject:p];
+    }
+    if (parts.count < 3) return;
+    [[RemoteAccess shared] addPeerName:parts[0]
+                                  user:(parts.count >= 4 ? parts[3] : @"")
+                                   ssh:parts[1].intValue
+                                   vnc:parts[2].intValue];
+    [self rebuildMenu];
+}
 
 - (void)addDisplaySectionToMenu:(NSMenu *)menu display:(DDDisplayInfo *)display {
     BOOL forced = [self.displayManager isHiDPIForcedForDisplay:display.displayID];

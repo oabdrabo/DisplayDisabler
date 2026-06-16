@@ -11,11 +11,14 @@ static NSString *const kDefaultRelayHost = @"";          // unset by default —
 static NSString *const kDefaultRelayUser = @"tunnel";
 static NSString *const kDefaultRelayPort = @"22";
 
+static NSString *const kPeersKey = @"RemotePeers";
+
 @interface RemoteAccess ()
 @property (nonatomic, strong) NSTask *task;
 @property (nonatomic) BOOL connected;
 @property (nonatomic, strong) dispatch_queue_t q;
 @property (nonatomic) NSTimeInterval backoff;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTask *> *forwards;  // localPort → ssh -L
 @end
 
 @implementation RemoteAccess
@@ -32,6 +35,7 @@ static NSString *const kDefaultRelayPort = @"22";
     if (self) {
         _q = dispatch_queue_create("com.local.DisplayDeck.remote", DISPATCH_QUEUE_SERIAL);
         _backoff = 2.0;
+        _forwards = [NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -90,10 +94,12 @@ static NSString *const kDefaultRelayPort = @"22";
 }
 
 - (NSString *)authorizeLine {
+    // permitlisten locks the *reverse* tunnel to this Mac's own ports; local
+    // forwarding stays open so the same key can act as a client (ProxyJump /
+    // -L) to reach peer Macs' ports on the relay.
     return [NSString stringWithFormat:
-        @"restrict,port-forwarding,permitlisten=\"%d\",permitlisten=\"%d\","
-        @"permitopen=\"localhost:%d\",permitopen=\"localhost:%d\" %@",
-        self.sshPort, self.vncPort, self.sshPort, self.vncPort, self.publicKey ?: @""];
+        @"restrict,port-forwarding,permitlisten=\"%d\",permitlisten=\"%d\" %@",
+        self.sshPort, self.vncPort, self.publicKey ?: @""];
 }
 
 - (BOOL)isConfigured { return self.relayHost.length > 0; }
@@ -130,6 +136,83 @@ static NSString *const kDefaultRelayPort = @"22";
             [self launchTunnelLocked];
         }
     });
+}
+
+#pragma mark - Client (connect to peer Macs)
+
+- (NSArray<NSDictionary *> *)peers {
+    NSArray *p = [[NSUserDefaults standardUserDefaults] arrayForKey:kPeersKey];
+    return [p isKindOfClass:[NSArray class]] ? p : @[];
+}
+
+- (void)addPeerName:(NSString *)name user:(NSString *)user ssh:(int)ssh vnc:(int)vnc {
+    if (name.length == 0 || ssh <= 0) return;
+    NSMutableArray *p = [self.peers mutableCopy];
+    [p addObject:@{ @"name": name,
+                    @"user": user.length ? user : NSUserName(),
+                    @"ssh": @(ssh),
+                    @"vnc": @(vnc > 0 ? vnc : 0) }];
+    [[NSUserDefaults standardUserDefaults] setObject:p forKey:kPeersKey];
+}
+
+- (void)removePeerAtIndex:(NSUInteger)index {
+    NSMutableArray *p = [self.peers mutableCopy];
+    if (index < p.count) {
+        [p removeObjectAtIndex:index];
+        [[NSUserDefaults standardUserDefaults] setObject:p forKey:kPeersKey];
+    }
+}
+
+// Common ssh args to reach the relay with only our key.
+- (NSArray<NSString *> *)relayBaseArgs {
+    return @[ @"-i", [self keyPath], @"-o", @"IdentitiesOnly=yes",
+              @"-o", @"StrictHostKeyChecking=accept-new",
+              @"-o", [NSString stringWithFormat:@"UserKnownHostsFile=%@", [self knownHosts]] ];
+}
+
+// Open Screen Sharing to a peer: hold an ssh -L from a local port → relay's
+// loopback port that the peer reverse-forwarded its :5900 onto, then open vnc://.
+- (void)screenSharePeer:(NSDictionary *)peer {
+    int vnc = [peer[@"vnc"] intValue];
+    if (vnc <= 0) return;
+    int local = 5910 + (vnc % 85);
+
+    NSTask *existing = self.forwards[@(local)];
+    if (!existing.isRunning) {
+        NSMutableArray *args = [[self relayBaseArgs] mutableCopy];
+        [args addObjectsFromArray:@[
+            @"-N", @"-T", @"-o", @"ExitOnForwardFailure=yes",
+            @"-L", [NSString stringWithFormat:@"%d:localhost:%d", local, vnc],
+            @"-p", self.relayPort,
+            [NSString stringWithFormat:@"%@@%@", self.relayUser, self.relayHost] ]];
+        NSTask *t = [[NSTask alloc] init];
+        t.launchPath = @"/usr/bin/ssh";
+        t.arguments = args;
+        t.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+        t.standardError  = [NSFileHandle fileHandleWithNullDevice];
+        @try { [t launch]; self.forwards[@(local)] = t; }
+        @catch (__unused NSException *e) { return; }
+    }
+    NSString *url = [NSString stringWithFormat:@"vnc://localhost:%d", local];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+    });
+}
+
+// Open an SSH session to a peer in Terminal (ProxyJump through the relay).
+- (void)sshPeer:(NSDictionary *)peer {
+    int ssh = [peer[@"ssh"] intValue];
+    if (ssh <= 0) return;
+    NSString *cmd = [NSString stringWithFormat:
+        @"ssh -i '%@' -o IdentitiesOnly=yes -J %@@%@ %@@localhost -p %d",
+        [self keyPath], self.relayUser, self.relayHost, peer[@"user"], ssh];
+    NSString *src = [NSString stringWithFormat:
+        @"tell application \"Terminal\"\nactivate\ndo script \"%@\"\nend tell",
+        [cmd stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""]];
+    NSDictionary *err = nil;
+    [[[NSAppleScript alloc] initWithSource:src] executeAndReturnError:&err];
+    if (err) NSLog(@"DisplayDeck: ssh peer failed: %@", err);
 }
 
 #pragma mark - Enable / disable

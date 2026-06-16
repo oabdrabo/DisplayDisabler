@@ -35,6 +35,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setRelayPort:(NSString *)port;
 - (void)setRelayHost:(NSString *)host user:(nullable NSString *)user port:(nullable NSString *)port;  // all at once
 
+// --- Client: connect to your *other* Macs through the same relay ---
+// Each peer: @{ @"name":…, @"user":…, @"ssh":@(port), @"vnc":@(port) }.
+- (NSArray<NSDictionary *> *)peers;
+- (void)addPeerName:(NSString *)name user:(NSString *)user ssh:(int)ssh vnc:(int)vnc;
+- (void)removePeerAtIndex:(NSUInteger)index;
+- (void)screenSharePeer:(NSDictionary *)peer;   // opens Screen Sharing via the relay
+- (void)sshPeer:(NSDictionary *)peer;           // opens an SSH session in Terminal
+
 // Restore on launch if previously enabled.
 - (void)restoreIfEnabled;
 
