@@ -359,27 +359,26 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)addKeepAwakeSectionToMenu:(NSMenu *)menu {
     Caffeine *caf = [Caffeine shared];
 
-    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Keep Awake"]];
+    // One "Keep Awake ▸" submenu: the on/off switch and the timed durations together.
+    NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"Keep Awake"
+                                                  action:nil keyEquivalent:@""];
+    root.image = ddSymbol(@"mug");
+    NSMenu *m = [[NSMenu alloc] init];
+    m.autoenablesItems = NO;
 
-    // On/off switch (indefinite). Was previously only toggleable by clicking the
-    // mug — no way to turn it off or start it indefinitely from the menu.
-    [menu addItem:[self switchRow:@"Keep Awake" icon:@"mug"
-                               on:caf.active action:@selector(keepAwakeSwitchToggled:)
-                            width:kSliderRowWidth]];
+    [m addItem:[self switchRow:@"Enabled" icon:@"mug"
+                            on:caf.active action:@selector(keepAwakeSwitchToggled:)
+                         width:200]];
 
     if (caf.active && caf.expiry) {
         NSDateFormatter *df = [[NSDateFormatter alloc] init];
         df.timeStyle = NSDateFormatterShortStyle;
         df.dateStyle = NSDateFormatterNoStyle;
-        [self addLabelToMenu:menu title:
+        [self addLabelToMenu:m title:
             [NSString stringWithFormat:@"   Awake until %@", [df stringFromDate:caf.expiry]]];
     }
 
-    NSMenuItem *forItem = [[NSMenuItem alloc] initWithTitle:@"Keep Awake for"
-        action:nil keyEquivalent:@""];
-    forItem.image = ddSymbol(@"clock");
-    NSMenu *durMenu = [[NSMenu alloc] init];
-    durMenu.autoenablesItems = NO;
+    [m addItem:[NSMenuItem sectionHeaderWithTitle:@"For a set time"]];
     NSArray *durations = @[ @[@"15 minutes", @900], @[@"30 minutes", @1800],
                             @[@"1 hour", @3600], @[@"2 hours", @7200], @[@"5 hours", @18000] ];
     for (NSArray *d in durations) {
@@ -387,10 +386,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
             action:@selector(keepAwakeFor:) keyEquivalent:@""];
         di.target = self;
         di.representedObject = d[1];
-        [durMenu addItem:di];
+        [m addItem:di];
     }
-    forItem.submenu = durMenu;
-    [menu addItem:forItem];
+
+    root.submenu = m;
+    [menu addItem:root];
 }
 
 - (void)keepAwakeFor:(NSMenuItem *)sender {
@@ -502,7 +502,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     // Toggle
     [m addItem:[self switchRow:@"Enabled" icon:@"network"
                             on:ra.isEnabled action:@selector(remoteSwitchToggled:)
-                            width:240]];
+                            width:300]];   // match the relay field row → flush-right toggle
 
     // Relay (inline)
     [m addItem:[NSMenuItem sectionHeaderWithTitle:@"Relay"]];
