@@ -470,56 +470,98 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
 - (void)addRemoteSectionToMenu:(NSMenu *)menu {
     RemoteAccess *ra = [RemoteAccess shared];
-    NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"Remote Access"
-                                                  action:nil keyEquivalent:@""];
-    root.image = ddSymbol(@"network");
-    NSMenu *sm = [[NSMenu alloc] init];
-    sm.autoenablesItems = NO;
 
-    NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:@"Enabled"
-        action:@selector(toggleRemoteAccess:) keyEquivalent:@""];
-    toggle.target = self;
-    toggle.state = ra.isEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    [sm addItem:toggle];
+    // On/off as an inline switch row at the top level — like the other controls,
+    // not a checkmark buried in a submenu.
+    [menu addItem:[self remoteSwitchRow:ra.isEnabled]];
 
-    if (ra.isEnabled) {
-        NSString *st = !ra.isConfigured ? @"⚠ Set a relay host below"
-            : (ra.isConnected ? [NSString stringWithFormat:@"● Connected · relay port %d", ra.sshPort]
-                              : @"○ Connecting…");
-        NSMenuItem *status = [[NSMenuItem alloc] initWithTitle:st action:nil keyEquivalent:@""];
-        status.enabled = NO;
-        [sm addItem:status];
-    }
-
-    // ---- Relay (single user@host:port endpoint) ----
-    [sm addItem:[NSMenuItem separatorItem]];
+    // Relay endpoint (single user@host:port field, sized to the menu width).
     NSString *endpoint = ra.isConfigured
         ? [NSString stringWithFormat:@"%@@%@:%@", ra.relayUser, ra.relayHost, ra.relayPort]
         : @"";
-    [sm addItem:[self relayFieldRow:@"Relay" value:endpoint placeholder:@"tunnel@host:22"
-                             action:@selector(relayEndpointFieldChanged:)]];
+    NSMenuItem *relay = [self relayFieldRow:@"Relay" value:endpoint placeholder:@"tunnel@host:22"
+                                     action:@selector(relayEndpointFieldChanged:)];
+    relay.tag = kSliderItemTag;   // sized to the menu width like the slider rows
+    [menu addItem:relay];
 
-    // ---- Copy helpers ----
-    [sm addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *cc = [[NSMenuItem alloc] initWithTitle:@"Copy connect command"
+    // Status line.
+    NSString *st;
+    if (!ra.isConfigured)    st = @"⚠ Set the relay above";
+    else if (!ra.isEnabled)  st = @"○ Off";
+    else                     st = ra.isConnected
+        ? [NSString stringWithFormat:@"● Connected · port %d", ra.sshPort]
+        : @"○ Connecting…";
+    [self addLabelToMenu:menu title:[@"   " stringByAppendingString:st]];
+
+    // Copy helpers in a compact submenu (secondary actions).
+    NSMenuItem *copy = [[NSMenuItem alloc] initWithTitle:@"Copy" action:nil keyEquivalent:@""];
+    copy.image = ddSymbol(@"doc.on.doc");
+    NSMenu *cm = [[NSMenu alloc] init];
+    cm.autoenablesItems = NO;
+    NSMenuItem *cc = [[NSMenuItem alloc] initWithTitle:@"Connect command"
         action:@selector(copyRemoteConnect:) keyEquivalent:@""];
-    cc.target = self; cc.image = ddSymbol(@"terminal"); [sm addItem:cc];
-    NSMenuItem *ck = [[NSMenuItem alloc] initWithTitle:@"Copy public key"
+    cc.target = self; cc.image = ddSymbol(@"terminal"); [cm addItem:cc];
+    NSMenuItem *ck = [[NSMenuItem alloc] initWithTitle:@"Public key"
         action:@selector(copyRemoteKey:) keyEquivalent:@""];
-    ck.target = self; ck.image = ddSymbol(@"key"); [sm addItem:ck];
-    NSMenuItem *al = [[NSMenuItem alloc] initWithTitle:@"Copy relay authorize line"
+    ck.target = self; ck.image = ddSymbol(@"key"); [cm addItem:ck];
+    NSMenuItem *al = [[NSMenuItem alloc] initWithTitle:@"Relay authorize line"
         action:@selector(copyRemoteAuthLine:) keyEquivalent:@""];
-    al.target = self; al.image = ddSymbol(@"checkmark.shield"); [sm addItem:al];
+    al.target = self; al.image = ddSymbol(@"checkmark.shield"); [cm addItem:al];
+    copy.submenu = cm;
+    [menu addItem:copy];
+}
 
-    root.submenu = sm;
-    [menu addItem:root];
+// Inline "Remote Access  [switch]" row (NSSwitch, like a Settings toggle).
+- (NSMenuItem *)remoteSwitchRow:(BOOL)on {
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 28)];
+
+    NSImageView *icon = [NSImageView imageViewWithImage:ddSymbol(@"network")];
+    icon.imageScaling = NSImageScaleProportionallyDown;
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:icon];
+
+    NSTextField *name = [NSTextField labelWithString:@"Remote Access"];
+    name.font = [NSFont menuFontOfSize:13];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:name];
+
+    NSSwitch *sw = [[NSSwitch alloc] init];
+    sw.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+    sw.controlSize = NSControlSizeMini;
+    sw.target = self;
+    sw.action = @selector(remoteSwitchToggled:);
+    sw.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:sw];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:28],
+        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:16],
+        [icon.heightAnchor constraintEqualToConstant:16],
+        [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:7],
+        [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [sw.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
+        [sw.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [sw.leadingAnchor constraintGreaterThanOrEqualToAnchor:name.trailingAnchor constant:10],
+    ]];
+
+    NSMenuItem *item = [[NSMenuItem alloc] init];
+    item.tag = kSliderItemTag;
+    item.view = row;
+    return item;
+}
+
+- (void)remoteSwitchToggled:(NSSwitch *)sw {
+    RemoteAccess *ra = [RemoteAccess shared];
+    if (sw.state == NSControlStateValueOn) { [ra enable]; } else { [ra disable]; }
 }
 
 // Inline editable row (label + text field) — edited in place in the menu, like
 // the sliders, instead of a popup. Commits on Return / when focus leaves.
 - (NSMenuItem *)relayFieldRow:(NSString *)label value:(NSString *)value
                   placeholder:(NSString *)placeholder action:(SEL)action {
-    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 30)];
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 30)];
 
     NSTextField *name = [NSTextField labelWithString:label];
     name.font = [NSFont menuFontOfSize:13];
@@ -583,13 +625,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         }
     }
     [ra setRelayHost:[self trimmed:host] user:[self trimmed:(user ?: @"")] port:port];
-}
-
-- (void)toggleRemoteAccess:(id)sender {
-    (void)sender;
-    RemoteAccess *ra = [RemoteAccess shared];
-    if (ra.isEnabled) { [ra disable]; } else { [ra enable]; }
-    [self rebuildMenu];
 }
 
 - (void)copyToPasteboard:(NSString *)s {
