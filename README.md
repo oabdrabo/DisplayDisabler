@@ -48,9 +48,13 @@ The menu-bar mug:
 
 <p align="center"><img src="assets/screenshots/menubar.png" height="26" alt="Menu-bar mug icon" /></p>
 
-The menu — per-display **Brightness** (with the inline **Ⓐ** auto-brightness toggle) and **Warmth** sliders, and per-app **Transparency** rows with frosted-glass, keep-on-top, and picture-in-picture toggles:
+The menu — per-display **Brightness** (with the inline **Ⓐ** auto-brightness toggle) and **Warmth** sliders, a **Window** snapping section, and per-app **Transparency** rows with frosted-glass, keep-on-top, and picture-in-picture toggles:
 
 <p align="center"><img src="assets/screenshots/menu.png" width="300" alt="Main menu" /></p>
+
+**Window snapping** — tile the focused window to halves, quarters, thirds, maximize or center, each with a layout glyph and a global `⌃⌥` shortcut:
+
+<p align="center"><img src="assets/screenshots/windowsnap.png" width="430" alt="Window snap menu with layout glyphs" /></p>
 
 Submenus — Keep-Awake durations, the curated **Resolution** picker (★ = panel-native), the **Force HiDPI** "More Space" tier, and the grouped **Settings**:
 

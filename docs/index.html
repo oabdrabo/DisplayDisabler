@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#13151a" />
 <title>DisplayDeck — total control of your Mac's displays</title>
-<meta name="description" content="A tiny macOS menu-bar app: disable screens, force HiDPI, boost brightness past 100%, warm the colors, make any window transparent or float, and keep your Mac awake. Free & open source, Apple Silicon." />
+<meta name="description" content="A tiny macOS menu-bar app: disable screens, force HiDPI, boost brightness past 100%, warm the colors, snap and tile windows, make any window transparent or float, and keep your Mac awake. Free & open source, Apple Silicon." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://oabdrabo.github.io/DisplayDeck/" />
 <meta property="og:title" content="DisplayDeck" />
@@ -216,7 +216,7 @@
     <div class="reveal in">
       <span class="eyebrow">macOS menu-bar app · Apple Silicon · open source</span>
       <h1>Total control of your <span class="warm">Mac's displays.</span></h1>
-      <p class="lede">Disable screens, force crisp HiDPI, push brightness past 100%, warm the colors, make any window float or go transparent — and keep your Mac awake. All from one coffee mug in your menu bar.</p>
+      <p class="lede">Disable screens, force crisp HiDPI, push brightness past 100%, warm the colors, snap windows into place, make any window float or go transparent — and keep your Mac awake. All from one coffee mug in your menu bar.</p>
       <div class="cta">
         <a class="btn download" href="https://github.com/oabdrabo/DisplayDeck/releases/latest/download/DisplayDeck.app.zip">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v6.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L7 8.59V2a1 1 0 0 1 1-1Zm-5 12a1 1 0 1 0 0 2h10a1 1 0 1 0 0-2H3Z"/></svg>
@@ -251,14 +251,15 @@
   <div class="wrap">
     <div class="head reveal">
       <div class="kicker">What it does</div>
-      <h2>Six tools, one menu.</h2>
+      <h2>Total display &amp; window control, one menu.</h2>
       <p>Each one leans on a private macOS framework to do something the system settings won't let you.</p>
     </div>
     <div class="feats reveal">
       <div class="feat"><span class="tag">DISPLAY</span><h3>Disable any screen</h3><p>Turn off the built-in panel in clamshell or headless setups so it stays dark when the lid opens. Auto-disable on external connect — with a failsafe that re-enables it if a disconnect would leave you with no usable screen.</p></div>
       <div class="feat"><span class="tag">SCALING</span><h3>Force HiDPI</h3><p>Add crisp, retina-scaled resolutions to displays that don't natively offer them, plus a "More Space" supersampling tier and optional persistent override plists.</p></div>
-      <div class="feat"><span class="tag">LIGHT</span><h3>Brightness + EDR boost</h3><p>Built-in and external brightness, an inline auto-brightness toggle, and a real boost above 100% — clamped to your panel's learned headroom, colors preserved.</p></div>
+      <div class="feat"><span class="tag">LIGHT</span><h3>Brightness + EDR boost</h3><p>Built-in and external brightness, an inline auto-brightness toggle, and a boost above 100% through an EDR overlay — large on XDR/HDR panels, a visible lift on standard ones.</p></div>
       <div class="feat"><span class="tag">COLOR</span><h3>Warmth</h3><p>A per-display color-temperature slider, f.lux style: neutral 6500&nbsp;K down to a warm ~3400&nbsp;K via gamma ramps. Restores native color at zero.</p></div>
+      <div class="feat"><span class="tag">TILING</span><h3>Window snapping</h3><p>Tile the focused window to halves, quarters, thirds, maximize or center — with global ⌃⌥ shortcuts, drag-to-edge snapping, and a menu of layout glyphs. No SIP changes needed.</p></div>
       <div class="feat"><span class="tag">WINDOWS</span><h3>Transparency, float &amp; PiP</h3><p>Set any app's opacity, add frosted-glass blur, keep a window on top, or shrink one into a still-usable floating corner.</p></div>
       <div class="feat"><span class="tag">POWER</span><h3>Keep awake</h3><p>An IOKit caffeine assertion so your Mac and its display won't sleep — indefinitely, or for a duration you pick. Left-click the mug to toggle.</p></div>
       <div class="feat"><span class="tag">TEXT</span><h3>Text smoothing</h3><p>Tune macOS's grayscale antialiasing (Off → Strong) so text isn't thin or fuzzy on external, non-Retina, or scaled monitors.</p></div>
@@ -275,6 +276,7 @@
       <p>Real captures — the menu lives where every other menu-bar app does, and the submenus stay out of your way until you need them.</p>
     </div>
     <div class="gallery reveal">
+      <figure><img src="assets/screenshots/windowsnap.png" alt="Window snap menu with layout glyphs" /><figcaption>window snapping · layout glyphs</figcaption></figure>
       <figure><img src="assets/screenshots/keepawake.png" alt="Keep-awake duration submenu" /><figcaption>keep-awake durations</figcaption></figure>
       <figure><img src="assets/screenshots/resolution.png" alt="Curated resolution picker" /><figcaption>resolution picker · ★ native</figcaption></figure>
       <figure><img src="assets/screenshots/forcehidpi.png" alt="Force HiDPI sizes submenu" /><figcaption>force HiDPI · more space</figcaption></figure>
@@ -297,7 +299,8 @@
       <div class="row"><span class="what">Disable display</span><span class="api"><b>CGSConfigureDisplayEnabled</b> — flips a screen off at the window-server level</span></div>
       <div class="row"><span class="what">Force HiDPI</span><span class="api">mirrors the panel onto a private <b>SLVirtualDisplay</b> + writes display-override plists</span></div>
       <div class="row"><span class="what">Warmth</span><span class="api"><b>CGSetDisplayTransferByTable</b> — per-channel gamma ramps</span></div>
-      <div class="row"><span class="what">Brightness boost</span><span class="api">a borderless <b>CAMetalLayer</b> EDR overlay, clamped each frame to live headroom</span></div>
+      <div class="row"><span class="what">Brightness boost</span><span class="api">a borderless <b>CAMetalLayer</b> EDR overlay (multiply blend) that drives the panel past 100%</span></div>
+      <div class="row"><span class="what">Window snapping</span><span class="api">tiles the focused window through the Accessibility API + global <b>RegisterEventHotKey</b> hot keys</span></div>
       <div class="row"><span class="what">Transparency &amp; blur</span><span class="api">a scripting addition injected into Dock calling <b>SLSSetWindowAlpha</b> over a private socket</span></div>
       <div class="row"><span class="what">Picture-in-Picture</span><span class="api">resizes the real window through the Accessibility API (<b>AXUIElement</b>)</span></div>
     </div>
