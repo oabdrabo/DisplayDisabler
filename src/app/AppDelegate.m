@@ -358,17 +358,22 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Keep Awake"]];
 
+    // On/off switch (indefinite). Was previously only toggleable by clicking the
+    // mug — no way to turn it off or start it indefinitely from the menu.
+    [menu addItem:[self switchRow:@"Keep Awake" icon:@"mug"
+                               on:caf.active action:@selector(keepAwakeSwitchToggled:)]];
+
     if (caf.active && caf.expiry) {
         NSDateFormatter *df = [[NSDateFormatter alloc] init];
         df.timeStyle = NSDateFormatterShortStyle;
         df.dateStyle = NSDateFormatterNoStyle;
         [self addLabelToMenu:menu title:
-            [NSString stringWithFormat:@"Awake until %@", [df stringFromDate:caf.expiry]]];
+            [NSString stringWithFormat:@"   Awake until %@", [df stringFromDate:caf.expiry]]];
     }
 
     NSMenuItem *forItem = [[NSMenuItem alloc] initWithTitle:@"Keep Awake for"
         action:nil keyEquivalent:@""];
-    forItem.image = ddSymbol(@"cup.and.saucer");
+    forItem.image = ddSymbol(@"clock");
     NSMenu *durMenu = [[NSMenu alloc] init];
     durMenu.autoenablesItems = NO;
     NSArray *durations = @[ @[@"15 minutes", @900], @[@"30 minutes", @1800],
@@ -387,6 +392,15 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)keepAwakeFor:(NSMenuItem *)sender {
     [[Caffeine shared] activateForDuration:[sender.representedObject doubleValue]];
     [self rebuildMenu];
+}
+
+- (void)keepAwakeSwitchToggled:(NSSwitch *)sw {
+    Caffeine *caf = [Caffeine shared];
+    if (sw.state == NSControlStateValueOn) {
+        if (!caf.active) [caf toggle];   // on → keep awake indefinitely
+    } else {
+        [caf deactivate];                // off → stop (timed or indefinite)
+    }
 }
 
 - (NSMenuItem *)actionItem:(NSString *)title action:(SEL)action
@@ -473,7 +487,8 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     // On/off as an inline switch row at the top level — like the other controls,
     // not a checkmark buried in a submenu.
-    [menu addItem:[self remoteSwitchRow:ra.isEnabled]];
+    [menu addItem:[self switchRow:@"Remote Access" icon:@"network"
+                               on:ra.isEnabled action:@selector(remoteSwitchToggled:)]];
 
     // Relay endpoint (single user@host:port field, sized to the menu width).
     NSString *endpoint = ra.isConfigured
@@ -511,16 +526,18 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:copy];
 }
 
-// Inline "Remote Access  [switch]" row (NSSwitch, like a Settings toggle).
-- (NSMenuItem *)remoteSwitchRow:(BOOL)on {
+// Inline "<label>  [switch]" row — an NSSwitch like a Settings toggle. Shared by
+// Keep Awake and Remote Access so on/off reads the same everywhere.
+- (NSMenuItem *)switchRow:(NSString *)label icon:(NSString *)symbol
+                       on:(BOOL)on action:(SEL)action {
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 28)];
 
-    NSImageView *icon = [NSImageView imageViewWithImage:ddSymbol(@"network")];
+    NSImageView *icon = [NSImageView imageViewWithImage:ddSymbol(symbol)];
     icon.imageScaling = NSImageScaleProportionallyDown;
     icon.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:icon];
 
-    NSTextField *name = [NSTextField labelWithString:@"Remote Access"];
+    NSTextField *name = [NSTextField labelWithString:label];
     name.font = [NSFont menuFontOfSize:13];
     name.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:name];
@@ -529,7 +546,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     sw.state = on ? NSControlStateValueOn : NSControlStateValueOff;
     sw.controlSize = NSControlSizeMini;
     sw.target = self;
-    sw.action = @selector(remoteSwitchToggled:);
+    sw.action = action;
     sw.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:sw];
 
