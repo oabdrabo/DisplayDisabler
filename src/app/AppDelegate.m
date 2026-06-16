@@ -739,6 +739,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
     [menu addItem:[self checkItemWithTitle:@"Frosted glass blur" key:kFrostedBlur]];
 
+    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Text"]];
+    [menu addItem:[self fontSmoothingItem]];
+
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:@"Launch at Login"
         action:@selector(toggleLoginItem:) keyEquivalent:@""];
@@ -756,6 +759,64 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     item.representedObject = key;
     item.state = [self pref:key] ? NSControlStateValueOn : NSControlStateValueOff;
     return item;
+}
+
+// ---- macOS font smoothing (AppleFontSmoothing, current-host global domain) ----
+// Bumps grayscale antialiasing strength so text isn't thin/fuzzy on external,
+// non-Retina, or scaled displays. Read by apps at launch → needs a re-login.
+
+- (NSInteger)currentFontSmoothing {
+    CFPropertyListRef v = CFPreferencesCopyValue(CFSTR("AppleFontSmoothing"),
+        kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+    NSInteger n = -1;  // -1 = key absent (system default)
+    if (v) {
+        if (CFGetTypeID(v) == CFNumberGetTypeID())
+            CFNumberGetValue((CFNumberRef)v, kCFNumberNSIntegerType, &n);
+        CFRelease(v);
+    }
+    return n;
+}
+
+- (void)chooseFontSmoothing:(NSMenuItem *)sender {
+    NSInteger level = [sender.representedObject integerValue];
+    CFStringRef key = CFSTR("AppleFontSmoothing");
+    if (level < 0) {
+        CFPreferencesSetValue(key, NULL, kCFPreferencesAnyApplication,
+                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+    } else {
+        CFNumberRef num = CFNumberCreate(NULL, kCFNumberNSIntegerType, &level);
+        CFPreferencesSetValue(key, num, kCFPreferencesAnyApplication,
+                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+        CFRelease(num);
+    }
+    CFPreferencesSynchronize(kCFPreferencesAnyApplication,
+                             kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+}
+
+- (NSMenuItem *)fontSmoothingItem {
+    NSMenuItem *parent = [[NSMenuItem alloc] initWithTitle:@"Text smoothing"
+                                                    action:nil keyEquivalent:@""];
+    parent.image = ddSymbol(@"textformat.size");
+    NSMenu *sub = [[NSMenu alloc] init];
+    sub.autoenablesItems = NO;
+    NSInteger cur = [self currentFontSmoothing];
+    NSArray<NSArray *> *opts = @[ @[@"System default", @(-1)], @[@"Off", @0],
+                                  @[@"Light", @1], @[@"Medium", @2], @[@"Strong", @3] ];
+    for (NSArray *o in opts) {
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:o[0]
+            action:@selector(chooseFontSmoothing:) keyEquivalent:@""];
+        it.target = self;
+        it.representedObject = o[1];
+        it.state = ([o[1] integerValue] == cur) ? NSControlStateValueOn : NSControlStateValueOff;
+        [sub addItem:it];
+    }
+    [sub addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *hint = [[NSMenuItem alloc] initWithTitle:@"Log out & back in to apply"
+                                                  action:nil keyEquivalent:@""];
+    hint.enabled = NO;
+    [sub addItem:hint];
+    parent.submenu = sub;
+    return parent;
 }
 
 - (NSArray<DDDisplayMode *> *)curatedModes:(NSArray<DDDisplayMode *> *)modes
