@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.3.3] — 2026-06-16
+
+### Changed
+- Window snap-menu glyphs now use a **16:10 screen aspect** instead of the previous too-wide (~16:9) shape, so they read as a real Mac display.
+
 ## [2.3.2] — 2026-06-16
 
 ### Added
@@ -68,6 +73,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.3.3]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.3
 [2.3.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.2
 [2.3.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.1
 [2.3.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.0

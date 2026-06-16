@@ -63,7 +63,9 @@ static NSImage *ddTintedSymbol(NSString *name, NSColor *color) {
 // tint with the menu text colour, so it adapts to light/dark. `r` is normalised
 // (0..1, y-up = visually top).
 static NSImage *ddSnapGlyph(CGRect r) {
-    NSImage *img = [NSImage imageWithSize:NSMakeSize(26, 16) flipped:NO
+    // 24×16 → inner screen 21×13 ≈ 16:10, matching a real Mac display (not the
+    // wide ~16:9 the previous 26-wide size produced).
+    NSImage *img = [NSImage imageWithSize:NSMakeSize(24, 16) flipped:NO
                             drawingHandler:^BOOL(NSRect dst) {
         NSRect screen = NSInsetRect(dst, 1.5, 1.5);
         NSBezierPath *bg = [NSBezierPath bezierPathWithRoundedRect:screen xRadius:2.5 yRadius:2.5];
