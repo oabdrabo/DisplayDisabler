@@ -330,8 +330,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
     [self addTransparencySectionToMenu:menu];
 
-    [menu addItem:[NSMenuItem separatorItem]];
-
+    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Text"]];
     [menu addItem:[self fontSmoothingRowItem]];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
@@ -433,6 +432,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         grant.image = ddSymbol(@"macwindow.badge.plus");
         grant.toolTip = @"Grant Accessibility permission to snap windows";
         [menu addItem:grant];
+        [self addSnapTogglesToMenu:menu];
         return;
     }
 
@@ -469,6 +469,13 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     root.submenu = sm;
     [menu addItem:root];
+    [self addSnapTogglesToMenu:menu];
+}
+
+// The snap behaviour toggles live with the Window section (not buried in Settings).
+- (void)addSnapTogglesToMenu:(NSMenu *)menu {
+    [menu addItem:[self checkItemWithTitle:@"Snap by dragging" key:kSnapDrag]];
+    [menu addItem:[self checkItemWithTitle:@"Keyboard shortcuts (⌃⌥)" key:kSnapShortcuts]];
 }
 
 - (void)snapMenu:(NSMenuItem *)sender {
@@ -1070,10 +1077,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
     [menu addItem:[self checkItemWithTitle:@"Frosted glass blur" key:kFrostedBlur]];
-
-    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Window"]];
-    [menu addItem:[self checkItemWithTitle:@"Snap by dragging to screen edges" key:kSnapDrag]];
-    [menu addItem:[self checkItemWithTitle:@"Keyboard shortcuts (⌃⌥ + keys)" key:kSnapShortcuts]];
 
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:@"Launch at Login"
