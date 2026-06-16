@@ -256,6 +256,8 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    [menu addItem:[self fontSmoothingItem]];
+
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
     settingsItem.image = ddSymbol(@"gearshape");
@@ -738,9 +740,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
     [menu addItem:[self checkItemWithTitle:@"Frosted glass blur" key:kFrostedBlur]];
-
-    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Text"]];
-    [menu addItem:[self fontSmoothingItem]];
 
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:@"Launch at Login"
