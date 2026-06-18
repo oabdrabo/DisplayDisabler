@@ -123,18 +123,17 @@
   .meta b{color:var(--muted);font-weight:500}
 
   .shot-hero{position:relative;display:flex;flex-direction:column;align-items:flex-end;gap:16px}
+  /* mug strip and menu shot share one explicit width so their edges always line up,
+     regardless of either image's aspect ratio */
   .shot-hero img{border-radius:14px;border:1px solid var(--line);
     box-shadow:0 40px 80px -30px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.02);
-    max-height:540px;width:auto}
-  /* match the menu shot's rendered width: 502 × (540/1144) ≈ 237px */
-  .shot-hero .mug-strip{width:237px;height:auto;max-height:none;
-    box-shadow:0 20px 44px -26px rgba(0,0,0,.6)}
+    width:250px;height:auto}
+  .shot-hero .mug-strip{box-shadow:0 20px 44px -26px rgba(0,0,0,.6)}
   .shot-hero::after{content:"";position:absolute;inset:auto 0 -30px 0;height:60px;
     background:radial-gradient(50% 100% at 70% 0,var(--warm-soft),transparent);filter:blur(10px);z-index:-1}
   @media(max-width:860px){.hero-grid{grid-template-columns:minmax(0,1fr);gap:40px}
     .shot-hero{align-items:center}
-    .shot-hero img{max-height:440px}
-    .shot-hero .mug-strip{width:193px}}   /* 502 × (440/1144) ≈ 193px */
+    .shot-hero img{width:210px}}
 
   /* ---- section scaffold ---- */
   section{padding:84px 0}
