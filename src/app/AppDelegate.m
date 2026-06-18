@@ -31,6 +31,17 @@ static const CGFloat kModeTabRate = 184;
 static const CGFloat kSliderRowWidth = 150;
 static const NSInteger kSliderItemTag = 0x51D5;
 static const void *kDDPctLabelKey = &kDDPctLabelKey;
+static const void *kDDFontLabelKey = &kDDFontLabelKey;
+
+// Text-smoothing levels map 1:1 onto AppleFontSmoothing 0–3 (3 = macOS ceiling).
+static NSString *ddFontSmoothingName(NSInteger level) {
+    switch (level) {
+        case 0:  return @"Off";
+        case 1:  return @"Light";
+        case 3:  return @"Strong";
+        default: return @"Medium";
+    }
+}
 
 static NSString *ddRateString(double hz, NSString *fallback) {
     return hz > 0 ? [NSString stringWithFormat:@"%.0fHz", hz] : fallback;
@@ -1208,44 +1219,63 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
 }
 
-- (void)fontSmoothingSegmentChanged:(NSSegmentedControl *)seg {
-    [self applyFontSmoothing:seg.selectedSegment];   // 0 = Off … 3 = Strong
+- (void)fontSmoothingSliderChanged:(NSSlider *)sender {
+    NSInteger level = (NSInteger)lround(sender.doubleValue);   // snaps to 0…3
+    NSTextField *value = objc_getAssociatedObject(sender, kDDFontLabelKey);
+    value.stringValue = ddFontSmoothingName(level);
+    [self applyFontSmoothing:level];
 }
 
-// Inline segmented row under the "Text smoothing" header: just the icon + the
-// strength control (the header already names it, so no redundant row label).
+// Discrete slider under the "Text smoothing" header — same icon + slider + value
+// layout as the Brightness/Warmth rows, so it reads as one interactive control
+// instead of four spelled-out segments. Snaps Off · Light · Medium · Strong
+// (AppleFontSmoothing 0–3; 3 is the macOS ceiling), with the level name as the
+// live value label.
 - (NSMenuItem *)fontSmoothingRowItem {
-    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 28)];
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 24)];
 
     NSImageView *iconView = [NSImageView imageViewWithImage:ddSymbol(@"textformat.size")];
     iconView.imageScaling = NSImageScaleProportionallyDown;
     iconView.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:iconView];
 
-    NSSegmentedControl *seg = [NSSegmentedControl
-        segmentedControlWithLabels:@[@"Off", @"Light", @"Medium", @"Strong"]
-                      trackingMode:NSSegmentSwitchTrackingSelectOne
-                            target:self action:@selector(fontSmoothingSegmentChanged:)];
-    seg.controlSize = NSControlSizeMini;
-    seg.segmentStyle = NSSegmentStyleRounded;
-    seg.translatesAutoresizingMaskIntoConstraints = NO;
-    // Always show where you are. When the key is absent (macOS's default state),
-    // reflect the system default — Medium — instead of leaving every segment
-    // un-highlighted, which read as "nothing is set / nothing is selected".
+    // Absent key = macOS default → show Medium so the current level is always visible.
     NSInteger cur = [self currentFontSmoothing];
-    seg.selectedSegment = (cur >= 0 && cur <= 3) ? cur : 2;   // unset → Medium (default)
-    seg.toolTip = @"Log out and back in for the change to take effect";
-    [row addSubview:seg];
+    if (cur < 0 || cur > 3) cur = 2;
+
+    NSSlider *slider = [NSSlider sliderWithValue:cur minValue:0 maxValue:3
+                                          target:self
+                                          action:@selector(fontSmoothingSliderChanged:)];
+    slider.numberOfTickMarks = 4;
+    slider.allowsTickMarkValuesOnly = YES;   // snap to Off/Light/Medium/Strong
+    slider.continuous = YES;
+    slider.controlSize = NSControlSizeSmall;
+    slider.toolTip = @"Log out and back in for the change to take effect";
+    slider.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:slider];
+
+    NSTextField *value = [NSTextField labelWithString:ddFontSmoothingName(cur)];
+    value.font = [NSFont menuFontOfSize:11];
+    value.textColor = [NSColor secondaryLabelColor];
+    value.alignment = NSTextAlignmentRight;
+    value.translatesAutoresizingMaskIntoConstraints = NO;
+    [value setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [row addSubview:value];
+    objc_setAssociatedObject(slider, kDDFontLabelKey, value, OBJC_ASSOCIATION_ASSIGN);
 
     [NSLayoutConstraint activateConstraints:@[
-        [row.heightAnchor constraintEqualToConstant:28],
+        [row.heightAnchor constraintEqualToConstant:24],
         [iconView.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
         [iconView.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
         [iconView.widthAnchor constraintEqualToConstant:16],
         [iconView.heightAnchor constraintEqualToConstant:16],
-        [seg.leadingAnchor constraintEqualToAnchor:iconView.trailingAnchor constant:10],
-        [seg.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
-        [seg.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [slider.leadingAnchor constraintEqualToAnchor:iconView.trailingAnchor constant:10],
+        [slider.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [value.leadingAnchor constraintEqualToAnchor:slider.trailingAnchor constant:8],
+        [value.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-14],
+        [value.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [value.widthAnchor constraintGreaterThanOrEqualToConstant:46],
     ]];
 
     NSMenuItem *item = [[NSMenuItem alloc] init];
