@@ -1229,8 +1229,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     seg.controlSize = NSControlSizeMini;
     seg.segmentStyle = NSSegmentStyleRounded;
     seg.translatesAutoresizingMaskIntoConstraints = NO;
+    // Always show where you are. When the key is absent (macOS's default state),
+    // reflect the system default — Medium — instead of leaving every segment
+    // un-highlighted, which read as "nothing is set / nothing is selected".
     NSInteger cur = [self currentFontSmoothing];
-    seg.selectedSegment = (cur >= 0 && cur <= 3) ? cur : -1;   // unset → nothing selected
+    seg.selectedSegment = (cur >= 0 && cur <= 3) ? cur : 2;   // unset → Medium (default)
     seg.toolTip = @"Log out and back in for the change to take effect";
     [row addSubview:seg];
 
