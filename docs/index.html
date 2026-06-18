@@ -405,6 +405,53 @@
   const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12});
   document.querySelectorAll('.reveal:not(.in)').forEach(el=>io.observe(el));
 </script>
+<!-- click any command / code block to copy it -->
+<script>
+(function () {
+  function clean(t) {
+    return (t || '').split('\n')
+      .map(function (l) { return l.replace(/^\s*\$\s/, '').replace(/\s+$/, ''); })
+      .filter(function (l) { return l && l.charAt(0) !== '#'; })
+      .join('\n').trim();
+  }
+  var toast;
+  function showToast() {
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.textContent = 'Copied to clipboard';
+      toast.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);background:#f0a24a;color:#13151a;font:600 13px/1 -apple-system,system-ui,sans-serif;padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .18s,transform .18s;z-index:9999;pointer-events:none';
+      document.body.appendChild(toast);
+    }
+    requestAnimationFrame(function () { toast.style.opacity = '1'; toast.style.transform = 'translateX(-50%) translateY(0)'; });
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { toast.style.opacity = '0'; toast.style.transform = 'translateX(-50%) translateY(8px)'; }, 1500);
+  }
+  function copy(el) {
+    var text = clean(el.innerText || el.textContent);
+    if (!text) return;
+    var done = function () { showToast(); if (window.ddTrack) window.ddTrack('copy_command'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  }
+  var els = [].slice.call(document.querySelectorAll('pre'));
+  var bc = document.getElementById('brewcmd');
+  if (bc) els.push(bc);
+  els.forEach(function (el) {
+    el.style.cursor = 'copy';
+    el.title = 'Click to copy';
+    el.setAttribute('role', 'button');
+    el.addEventListener('click', function () { copy(el); });
+  });
+})();
+</script>
 <!-- shortlink analytics — only active when served via the displaydeck.pyxis3.ai
      reverse proxy; stays silent on raw github.io. Host-based attribution
      (proxy links never carry an sl_cid). -->
@@ -420,6 +467,7 @@
   function conv(label, value) {
     new Image().src = '/api/conv?host=' + encodeURIComponent(H) + '&label=' + encodeURIComponent(label) + '&value=' + (value || 0) + '&cid=' + cid;
   }
+  window.ddTrack = ev;
   ev('visit');
   var copybtn = document.getElementById('copybtn');
   if (copybtn) copybtn.addEventListener('click', function () { ev('copy_install'); }, { passive: true });
