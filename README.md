@@ -7,7 +7,7 @@
 
 Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth (with auto-night) · window tiling/snapping · transparency, blur, keep-on-top & picture-in-picture · keep-awake · remote access.
 
-[![Release](https://img.shields.io/badge/release-v2.4.2-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.4.3-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple&logoColor=white)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-555?style=flat-square)](#-requirements)
@@ -39,7 +39,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 | 🪟 **Window transparency** | Set per-app or all-window opacity for **any** app, via a self-contained scripting addition injected into Dock (no external tools). Optional **frosted-glass blur**, per-app **Keep on top**, and **Picture-in-Picture** (shrink a window into a still-usable floating corner). |
 | ☕ **Keep awake** | An IOKit caffeine assertion so the Mac and its display don't sleep — indefinitely (toggle) or for a set duration (15 min → 5 h). Replaces KeepingYouAwake. |
 | 🌐 **Remote access** | Reach this Mac — and your **other Macs** — from anywhere, with **nothing to install**. An auto-reconnecting **reverse-SSH** tunnel through a relay host *you* control forwards **SSH** and **Screen Sharing**; no Tailscale/Headscale or third-party agent. Doubles as a **client**: peers on the same relay are **auto-discovered**, so you can Screen Share or SSH into them from the menu. |
-| 🔤 **Text smoothing** | Adjust macOS's grayscale antialiasing (Off → Strong) so text isn't thin or fuzzy on external, non-Retina, or scaled monitors. Global; applies after a re-login. |
+| 🔤 **Text smoothing** | Toggle macOS's grayscale antialiasing **on/off** so text isn't thin or fuzzy on external, non-Retina, or scaled monitors. (macOS treats `AppleFontSmoothing` as binary — the old strength levels render identically — so this is a single switch.) Global; applies after a re-login. |
 
 The menu-bar icon is an interactive **coffee mug**: left-click toggles keep-awake (filled cup = awake), right-click opens the menu.
 

@@ -31,17 +31,6 @@ static const CGFloat kModeTabRate = 184;
 static const CGFloat kSliderRowWidth = 150;
 static const NSInteger kSliderItemTag = 0x51D5;
 static const void *kDDPctLabelKey = &kDDPctLabelKey;
-static const void *kDDFontLabelKey = &kDDFontLabelKey;
-
-// Text-smoothing levels map 1:1 onto AppleFontSmoothing 0–3 (3 = macOS ceiling).
-static NSString *ddFontSmoothingName(NSInteger level) {
-    switch (level) {
-        case 0:  return @"Off";
-        case 1:  return @"Light";
-        case 3:  return @"Strong";
-        default: return @"Medium";
-    }
-}
 
 static NSString *ddRateString(double hz, NSString *fallback) {
     return hz > 0 ? [NSString stringWithFormat:@"%.0fHz", hz] : fallback;
@@ -345,8 +334,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Transparency"]];
     [self addTransparencySectionToMenu:menu];
 
-    [menu addItem:[NSMenuItem sectionHeaderWithTitle:@"Text smoothing"]];
-    [menu addItem:[self fontSmoothingRowItem]];
+    [menu addItem:[NSMenuItem separatorItem]];
+    // Absent key = macOS default (smoothing on) → toggle reads as On unless explicitly 0.
+    [menu addItem:[self switchRow:@"Text smoothing" icon:@"textformat.size"
+                               on:([self currentFontSmoothing] != 0)
+                           action:@selector(fontSmoothingToggled:) width:kSliderRowWidth]];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
@@ -1219,69 +1211,12 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
 }
 
-- (void)fontSmoothingSliderChanged:(NSSlider *)sender {
-    NSInteger level = (NSInteger)lround(sender.doubleValue);   // snaps to 0…3
-    NSTextField *value = objc_getAssociatedObject(sender, kDDFontLabelKey);
-    value.stringValue = ddFontSmoothingName(level);
-    [self applyFontSmoothing:level];
-}
-
-// Discrete slider under the "Text smoothing" header — same icon + slider + value
-// layout as the Brightness/Warmth rows, so it reads as one interactive control
-// instead of four spelled-out segments. Snaps Off · Light · Medium · Strong
-// (AppleFontSmoothing 0–3; 3 is the macOS ceiling), with the level name as the
-// live value label.
-- (NSMenuItem *)fontSmoothingRowItem {
-    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 24)];
-
-    NSImageView *iconView = [NSImageView imageViewWithImage:ddSymbol(@"textformat.size")];
-    iconView.imageScaling = NSImageScaleProportionallyDown;
-    iconView.translatesAutoresizingMaskIntoConstraints = NO;
-    [row addSubview:iconView];
-
-    // Absent key = macOS default → show Medium so the current level is always visible.
-    NSInteger cur = [self currentFontSmoothing];
-    if (cur < 0 || cur > 3) cur = 2;
-
-    NSSlider *slider = [NSSlider sliderWithValue:cur minValue:0 maxValue:3
-                                          target:self
-                                          action:@selector(fontSmoothingSliderChanged:)];
-    slider.numberOfTickMarks = 4;
-    slider.allowsTickMarkValuesOnly = YES;   // snap to Off/Light/Medium/Strong
-    slider.continuous = YES;
-    slider.controlSize = NSControlSizeSmall;
-    slider.toolTip = @"Log out and back in for the change to take effect";
-    slider.translatesAutoresizingMaskIntoConstraints = NO;
-    [row addSubview:slider];
-
-    NSTextField *value = [NSTextField labelWithString:ddFontSmoothingName(cur)];
-    value.font = [NSFont menuFontOfSize:11];
-    value.textColor = [NSColor secondaryLabelColor];
-    value.alignment = NSTextAlignmentRight;
-    value.translatesAutoresizingMaskIntoConstraints = NO;
-    [value setContentHuggingPriority:NSLayoutPriorityRequired
-                      forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [row addSubview:value];
-    objc_setAssociatedObject(slider, kDDFontLabelKey, value, OBJC_ASSOCIATION_ASSIGN);
-
-    [NSLayoutConstraint activateConstraints:@[
-        [row.heightAnchor constraintEqualToConstant:24],
-        [iconView.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
-        [iconView.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [iconView.widthAnchor constraintEqualToConstant:16],
-        [iconView.heightAnchor constraintEqualToConstant:16],
-        [slider.leadingAnchor constraintEqualToAnchor:iconView.trailingAnchor constant:10],
-        [slider.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [value.leadingAnchor constraintEqualToAnchor:slider.trailingAnchor constant:8],
-        [value.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-14],
-        [value.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [value.widthAnchor constraintGreaterThanOrEqualToConstant:46],
-    ]];
-
-    NSMenuItem *item = [[NSMenuItem alloc] init];
-    item.tag = kSliderItemTag;   // sized to the menu width like the slider rows
-    item.view = row;
-    return item;
+// Text smoothing is an On/Off setting on modern macOS, not a gradient: pixel-diffing
+// rendered text shows AppleFontSmoothing 1/2/3 are byte-identical — only 0 (off) vs
+// on actually changes glyphs. So this is a single toggle. On writes the standard
+// level (2); Off writes 0. (Apps read it at launch, so it applies after a re-login.)
+- (void)fontSmoothingToggled:(NSSwitch *)sw {
+    [self applyFontSmoothing:(sw.state == NSControlStateValueOn) ? 2 : 0];
 }
 
 - (NSArray<DDDisplayMode *> *)curatedModes:(NSArray<DDDisplayMode *> *)modes

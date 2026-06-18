@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.4.3] — 2026-06-18
+
+### Changed
+- **Text smoothing is now a simple On/Off toggle** instead of a multi-level control. Pixel-diffing rendered text confirmed that modern macOS treats `AppleFontSmoothing` as binary: levels Light/Medium/Strong come out **byte-identical** — only **Off vs On** actually changes how glyphs are drawn (off = thinner/lighter, on = dilated). The old strength gradient was removed by macOS years ago, so a slider implied distinctions that don't exist. On writes the standard level; Off disables smoothing. (Still applies after a re-login, since apps read it at launch.)
+
 ## [2.4.2] — 2026-06-18
 
 ### Changed
@@ -105,6 +110,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.4.3]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.3
 [2.4.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.2
 [2.4.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.1
 [2.4.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.0
