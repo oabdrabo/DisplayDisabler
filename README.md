@@ -7,7 +7,7 @@
 
 Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth (with auto-night) · window tiling/snapping · transparency, blur, keep-on-top & picture-in-picture · keep-awake · remote access.
 
-[![Release](https://img.shields.io/badge/release-v2.4.1-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.4.2-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple&logoColor=white)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-555?style=flat-square)](#-requirements)

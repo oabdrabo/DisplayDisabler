@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.4.2] — 2026-06-18
+
+### Changed
+- **Text smoothing is now a slider, not four spelled-out buttons.** It's a single discrete control — the same icon + slider + value layout as the Brightness and Warmth rows — that snaps **Off · Light · Medium · Strong** with the level name as its live label. Takes far less width and reads as one interactive control. It also **always shows your current level**: previously, when the system key was unset (the default state) nothing was highlighted, so you couldn't tell where you were; it now reflects the macOS default (Medium). Strong is the real ceiling — macOS's `AppleFontSmoothing` tops out at that level.
+
 ## [2.4.1] — 2026-06-18
 
 ### Fixed
@@ -100,6 +105,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.4.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.2
 [2.4.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.1
 [2.4.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.0
 [2.3.5]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.3.5
