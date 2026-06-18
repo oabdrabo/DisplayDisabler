@@ -1,23 +1,45 @@
 #import "RemoteAccess.h"
 #import <AppKit/AppKit.h>
+#import <IOKit/pwr_mgt/IOPMLib.h>
 
 static NSString *const kEnabledKey  = @"RemoteAccessEnabled";
 static NSString *const kServicesKey = @"RemoteServicesEnabled";   // services already turned on once
 static NSString *const kRelayHostKey = @"RemoteRelayHost";
 static NSString *const kRelayUserKey = @"RemoteRelayUser";
 static NSString *const kRelayPortKey = @"RemoteRelayPort";
+static NSString *const kKeepAwakeKey = @"RemoteKeepAwake";
 
 static NSString *const kDefaultRelayHost = @"";          // unset by default — user configures
 static NSString *const kDefaultRelayUser = @"tunnel";
 static NSString *const kDefaultRelayPort = @"22";
 
+// Boil ssh's stderr down to one human-readable cause so the menu can say *why*.
+static NSString *ddFriendlyTunnelError(NSString *raw) {
+    if (raw.length == 0) return nil;
+    NSString *low = raw.lowercaseString;
+    if ([low containsString:@"remote port forwarding failed"]) return @"Relay port already in use";
+    if ([low containsString:@"could not resolve"])             return @"Relay host not found";
+    if ([low containsString:@"permission denied"])             return @"Relay rejected the key";
+    if ([low containsString:@"host key verification failed"])  return @"Relay host key changed";
+    if ([low containsString:@"connection refused"] || [low containsString:@"timed out"] ||
+        [low containsString:@"no route to host"] || [low containsString:@"network is unreachable"])
+        return @"Relay unreachable";
+    for (NSString *line in [raw componentsSeparatedByString:@"\n"]) {
+        NSString *t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (t.length) return t;
+    }
+    return nil;
+}
+
 @interface RemoteAccess ()
 @property (nonatomic, strong) NSTask *task;
 @property (nonatomic) BOOL connected;
+@property (nonatomic, copy, nullable) NSString *lastError;
 @property (nonatomic, strong) dispatch_queue_t q;
 @property (nonatomic) NSTimeInterval backoff;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTask *> *forwards;  // localPort → ssh -L
 @property (nonatomic, strong) NSArray<NSDictionary *> *cachedPeers;
+@property (nonatomic) IOPMAssertionID sleepAssertion;   // 0 = none held
 @end
 
 @implementation RemoteAccess
@@ -57,6 +79,28 @@ static NSString *const kDefaultRelayPort = @"22";
 - (NSString *)relayPort { return [[NSUserDefaults standardUserDefaults] stringForKey:kRelayPortKey] ?: kDefaultRelayPort; }
 
 - (BOOL)isEnabled { return [[NSUserDefaults standardUserDefaults] boolForKey:kEnabledKey]; }
+
+- (BOOL)keepAwake {
+    NSNumber *v = [[NSUserDefaults standardUserDefaults] objectForKey:kKeepAwakeKey];
+    return v ? v.boolValue : YES;   // default ON — stay reachable while remote access is up
+}
+- (void)setKeepAwake:(BOOL)keepAwake {
+    [[NSUserDefaults standardUserDefaults] setBool:keepAwake forKey:kKeepAwakeKey];
+    [self updateSleepAssertion];
+}
+
+// Hold an idle-sleep assertion while remote access is on, so the Mac doesn't doze
+// off and drop the tunnel. Idle-sleep only — a closed laptop lid still sleeps.
+- (void)updateSleepAssertion {
+    BOOL want = self.isEnabled && self.keepAwake;
+    if (want && self.sleepAssertion == 0) {
+        IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep,
+            kIOPMAssertionLevelOn, CFSTR("DisplayDeck Remote Access"), &_sleepAssertion);
+    } else if (!want && self.sleepAssertion != 0) {
+        IOPMAssertionRelease(self.sleepAssertion);
+        self.sleepAssertion = 0;
+    }
+}
 
 // Stable per-Mac loopback ports on the relay, derived from the host name.
 - (int)portWithBase:(int)base {
@@ -196,9 +240,10 @@ static NSString *const kDefaultRelayPort = @"22";
             if (f.count < 3) continue;
             int ssh = f[1].intValue, vnc = f[2].intValue;
             if (ssh <= 0 || ssh == selfSsh) continue;   // skip ourselves
+            BOOL online = (f.count >= 4 && f[3].intValue != 0);   // 4th field = live flag
             [found addObject:@{ @"name": f[0].length ? f[0] : @"Mac",
                                 @"user": NSUserName(),
-                                @"ssh": @(ssh), @"vnc": @(vnc) }];
+                                @"ssh": @(ssh), @"vnc": @(vnc), @"online": @(online) }];
         }
         if ([found isEqualToArray:(self.cachedPeers ?: @[])]) return;   // no change → no rebuild
         self.cachedPeers = found;
@@ -260,6 +305,21 @@ static NSString *const kDefaultRelayPort = @"22";
     if (err) NSLog(@"DisplayDeck: ssh peer failed: %@", err);
 }
 
+// Open an SFTP (file transfer) session to a peer in Terminal, over the same relay.
+- (void)sftpPeer:(NSDictionary *)peer {
+    int ssh = [peer[@"ssh"] intValue];
+    if (ssh <= 0) return;
+    NSString *cmd = [NSString stringWithFormat:
+        @"sftp -i '%@' -o IdentitiesOnly=yes -J %@@%@ -P %d %@@localhost",
+        [self keyPath], self.relayUser, self.relayHost, ssh, peer[@"user"]];
+    NSString *src = [NSString stringWithFormat:
+        @"tell application \"Terminal\"\nactivate\ndo script \"%@\"\nend tell",
+        [cmd stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""]];
+    NSDictionary *err = nil;
+    [[[NSAppleScript alloc] initWithSource:src] executeAndReturnError:&err];
+    if (err) NSLog(@"DisplayDeck: sftp peer failed: %@", err);
+}
+
 #pragma mark - Enable / disable
 
 - (void)enable {
@@ -269,16 +329,18 @@ static NSString *const kDefaultRelayPort = @"22";
         return;
     }
     [self enableServicesIfNeeded];
+    [self updateSleepAssertion];
     dispatch_async(self.q, ^{ self.backoff = 2.0; [self launchTunnelLocked]; });
 }
 
 - (void)disable {
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kEnabledKey];
+    [self updateSleepAssertion];
     dispatch_async(self.q, ^{
         NSTask *t = self.task;
         self.task = nil;
         @try { [t terminate]; } @catch (__unused NSException *e) {}
-        dispatch_async(dispatch_get_main_queue(), ^{ self.connected = NO; });
+        dispatch_async(dispatch_get_main_queue(), ^{ self.connected = NO; self.lastError = nil; });
     });
 }
 
@@ -294,6 +356,7 @@ static NSString *const kDefaultRelayPort = @"22";
         @try { if (f.isRunning) [f terminate]; } @catch (__unused NSException *e) {}
     }
     [self.forwards removeAllObjects];
+    if (self.sleepAssertion != 0) { IOPMAssertionRelease(self.sleepAssertion); self.sleepAssertion = 0; }
 }
 
 // Enable Remote Login + Screen Sharing once (single admin prompt). Best-effort:
@@ -343,14 +406,21 @@ static NSString *const kDefaultRelayPort = @"22";
         [NSString stringWithFormat:@"%@@%@", self.relayUser, self.relayHost],
     ];
     t.standardOutput = [NSFileHandle fileHandleWithNullDevice];
-    t.standardError  = [NSFileHandle fileHandleWithNullDevice];
+    NSPipe *errPipe = [NSPipe pipe];
+    t.standardError  = errPipe;
 
     __weak __typeof(self) ws = self;
     t.terminationHandler = ^(NSTask *task) {
         (void)task;
         __strong __typeof(ws) self = ws; if (!self) return;
+        NSData *ed = [errPipe.fileHandleForReading readDataToEndOfFile];
+        NSString *why = ddFriendlyTunnelError(
+            [[NSString alloc] initWithData:ed encoding:NSUTF8StringEncoding] ?: @"");
         dispatch_async(self.q, ^{
-            dispatch_async(dispatch_get_main_queue(), ^{ self.connected = NO; });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.connected = NO;
+                if (why) self.lastError = why;
+            });
             if (!self.isEnabled) return;
             // exponential backoff, capped — survive relay reboots / network drops
             NSTimeInterval delay = self.backoff;
@@ -367,7 +437,7 @@ static NSString *const kDefaultRelayPort = @"22";
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), self.q, ^{
             if (self.task == t && t.isRunning) {
                 self.backoff = 2.0;
-                dispatch_async(dispatch_get_main_queue(), ^{ self.connected = YES; });
+                dispatch_async(dispatch_get_main_queue(), ^{ self.connected = YES; self.lastError = nil; });
             }
         });
     } @catch (__unused NSException *e) {

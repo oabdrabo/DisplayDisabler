@@ -7,7 +7,7 @@
 
 Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth (with auto-night) · window tiling/snapping · transparency, blur, keep-on-top & picture-in-picture · keep-awake · remote access.
 
-[![Release](https://img.shields.io/badge/release-v2.4.4-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.5.0-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple&logoColor=white)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-555?style=flat-square)](#-requirements)
@@ -38,7 +38,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 | 🧩 **Window snapping** | Tile the focused window to **halves, quarters, thirds / two-thirds, maximize, center**, or **restore** — via **global `⌃⌥` keyboard shortcuts**, **dragging to a screen edge/corner** (with a live preview), or the **Window** menu. Uses the Accessibility API; works on a stock machine. |
 | 🪟 **Window transparency** | Set per-app or all-window opacity for **any** app, via a self-contained scripting addition injected into Dock (no external tools). Optional **frosted-glass blur**, per-app **Keep on top**, and **Picture-in-Picture** (shrink a window into a still-usable floating corner). |
 | ☕ **Keep awake** | An IOKit caffeine assertion so the Mac and its display don't sleep — indefinitely (toggle) or for a set duration (15 min → 5 h). Replaces KeepingYouAwake. |
-| 🌐 **Remote access** | Reach this Mac — and your **other Macs** — from anywhere, with **nothing to install**. An auto-reconnecting **reverse-SSH** tunnel through a relay host *you* control forwards **SSH** and **Screen Sharing**; no Tailscale/Headscale or third-party agent. Doubles as a **client**: peers on the same relay are **auto-discovered**, so you can Screen Share or SSH into them from the menu. |
+| 🌐 **Remote access** | Reach this Mac — and your **other Macs** — from anywhere, with **nothing to install**. An auto-reconnecting **reverse-SSH** tunnel through a relay host *you* control forwards **SSH**, **Screen Sharing**, and **file transfer (SFTP)**; no Tailscale/Headscale or third-party agent. Doubles as a **client**: peers on the same relay are **auto-discovered with live online status**, so you can Screen Share, SSH, or transfer files to them from the menu. Optionally **keeps the Mac awake** while on so it stays reachable, and surfaces **why** a connection failed. |
 | 🔤 **Text smoothing** | Toggle macOS's grayscale antialiasing **on/off** — a single **system-wide** switch that affects **every display, including the built-in** (`AppleFontSmoothing` isn't per-display). The effect is most visible on **non-Retina, external, or scaled** monitors; on a Retina panel it's subtle by design. (macOS treats the setting as binary — the old strength levels render identically.) Applies after a re-login. |
 
 The menu-bar icon is an interactive **coffee mug**: left-click toggles keep-awake (filled cup = awake), right-click opens the menu.
@@ -53,7 +53,7 @@ The menu — a **Keep Awake** row with an inline toggle, per-display **Brightnes
 
 <p align="center"><img src="assets/screenshots/menu.png" width="300" alt="Main menu" /></p>
 
-**Remote access** — set the relay inline as a single `user@host:port`, copy this Mac's relay key, and Screen Share / SSH into your auto-discovered Macs, all from the menu:
+**Remote access** — set the relay inline as a single `user@host:port`, copy this Mac's relay key, keep the Mac awake while on, and Screen Share / SSH / transfer files to your auto-discovered Macs (● live · ○ offline), all from the menu. If a connection fails it tells you why (here the placeholder `relay.example.com` doesn't resolve):
 
 <p align="center"><img src="assets/screenshots/remote.png" width="500" alt="Remote Access submenu — relay field, status, and discovered Macs" /></p>
 

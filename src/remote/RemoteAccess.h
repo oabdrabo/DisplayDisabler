@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, readonly, getter=isEnabled) BOOL enabled;   // user wants it on (persisted)
 @property (nonatomic, readonly, getter=isConnected) BOOL connected; // tunnel process currently up
+@property (nonatomic, readonly, nullable) NSString *lastError;   // why the tunnel last failed (nil once connected)
+@property (nonatomic) BOOL keepAwake;            // hold a sleep assertion while enabled, so the Mac stays reachable (persisted, default ON)
 
 // Turn on: generate the key if needed, enable Remote Login + Screen Sharing
 // (one admin prompt), and start the auto-reconnecting tunnel.
@@ -36,13 +38,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 // --- Client: connect to your *other* Macs through the same relay ---
 // Peers are auto-discovered: a read-only "list-peers" command on the relay
-// returns every authorized Mac's name + ports. Each peer:
-// @{ @"name":…, @"user":…, @"ssh":@(port), @"vnc":@(port) }.
+// returns every authorized Mac's name, ports, and whether its tunnel is live. Each:
+// @{ @"name":…, @"user":…, @"ssh":@(port), @"vnc":@(port), @"online":@(BOOL) }.
 - (NSArray<NSDictionary *> *)peers;       // last discovered set (cached)
 - (void)refreshPeers;                     // async: query the relay, then onPeersChanged
 @property (nonatomic, copy, nullable) void (^onPeersChanged)(void);
 - (void)screenSharePeer:(NSDictionary *)peer;   // opens Screen Sharing via the relay
 - (void)sshPeer:(NSDictionary *)peer;           // opens an SSH session in Terminal
+- (void)sftpPeer:(NSDictionary *)peer;          // opens an SFTP (file transfer) session in Terminal
 
 // Restore on launch if previously enabled.
 - (void)restoreIfEnabled;

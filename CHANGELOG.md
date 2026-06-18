@@ -2,6 +2,14 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.5.0] — 2026-06-18
+
+### Added
+- **Remote Access — file transfer (SFTP).** Each discovered Mac now has a **Files** action that opens an SFTP session over the same relay tunnel, so you can move files to/from it alongside Screen Share and SSH.
+- **Live peer online status.** Discovered Macs show **● online / ○ offline** — the relay now reports whether each Mac's tunnel is actually up, instead of just listing every authorized Mac, so you don't click into a peer that isn't there.
+- **Keep awake while on.** An optional (default on) toggle holds an idle-sleep assertion while Remote Access is enabled, so the Mac stays reachable instead of dozing off and dropping the tunnel. (Idle sleep only — a closed laptop lid still sleeps.)
+- **Connection error reasons.** When the tunnel can't connect, the status line now says *why* — "Relay unreachable", "Relay rejected the key", "Relay port already in use", "Relay host not found", etc. — instead of an endless "Connecting…".
+
 ## [2.4.4] — 2026-06-18
 
 ### Fixed
@@ -119,6 +127,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.5.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.5.0
 [2.4.4]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.4
 [2.4.3]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.3
 [2.4.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.4.2

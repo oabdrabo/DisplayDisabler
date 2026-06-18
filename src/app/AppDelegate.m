@@ -557,7 +557,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     NSString *state;
     if (!ra.isConfigured)    state = @"⚠ Set the relay above";
     else if (!ra.isEnabled)  state = @"○ Off";
-    else                     state = ra.isConnected ? @"● Connected" : @"○ Connecting…";
+    else if (ra.isConnected) state = @"● Connected";
+    else                     state = ra.lastError ? [@"⚠ " stringByAppendingString:ra.lastError]
+                                                   : @"○ Connecting…";
     [self addLabelToMenu:m title:state];
     if (ra.isConfigured) {
         [self addLabelToMenu:m title:
@@ -567,24 +569,31 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         action:@selector(copyRemoteAuthLine:) keyEquivalent:@""];
     key.target = self; key.image = ddSymbol(@"key");
     [m addItem:key];
+    [m addItem:[self switchRow:@"Keep awake while on" icon:@"powersleep"
+                            on:ra.keepAwake action:@selector(keepAwakeRemoteToggled:)
+                         width:kSliderRowWidth]];
 
-    // Connect — auto-discovered peers, inline (no per-peer submenus)
+    // Connect — auto-discovered peers; ● live / ○ offline, with per-peer actions.
     [m addItem:[NSMenuItem sectionHeaderWithTitle:@"Connect to a Mac"]];
     NSArray<NSDictionary *> *peers = ra.peers;
     if (peers.count == 0) {
         [self addLabelToMenu:m title:@"No other Macs found"];
     }
     for (NSDictionary *peer in peers) {
-        NSMenuItem *ss = [[NSMenuItem alloc] initWithTitle:
-            [NSString stringWithFormat:@"%@ — Screen Share", peer[@"name"]]
+        [self addLabelToMenu:m title:[NSString stringWithFormat:@"%@ %@",
+            [peer[@"online"] boolValue] ? @"●" : @"○", peer[@"name"]]];
+        NSMenuItem *ss = [[NSMenuItem alloc] initWithTitle:@"Screen Share"
             action:@selector(connectScreenShare:) keyEquivalent:@""];
         ss.target = self; ss.image = ddSymbol(@"display"); ss.representedObject = peer;
         [m addItem:ss];
-        NSMenuItem *sh = [[NSMenuItem alloc] initWithTitle:
-            [NSString stringWithFormat:@"%@ — SSH", peer[@"name"]]
+        NSMenuItem *sh = [[NSMenuItem alloc] initWithTitle:@"SSH"
             action:@selector(connectSSH:) keyEquivalent:@""];
         sh.target = self; sh.image = ddSymbol(@"terminal"); sh.representedObject = peer;
         [m addItem:sh];
+        NSMenuItem *sf = [[NSMenuItem alloc] initWithTitle:@"Files"
+            action:@selector(connectSFTP:) keyEquivalent:@""];
+        sf.target = self; sf.image = ddSymbol(@"folder"); sf.representedObject = peer;
+        [m addItem:sf];
     }
     NSMenuItem *refresh = [[NSMenuItem alloc] initWithTitle:@"Refresh"
         action:@selector(refreshRemotePeers:) keyEquivalent:@""];
@@ -728,6 +737,12 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 }
 - (void)connectSSH:(NSMenuItem *)sender {
     [[RemoteAccess shared] sshPeer:sender.representedObject];
+}
+- (void)connectSFTP:(NSMenuItem *)sender {
+    [[RemoteAccess shared] sftpPeer:sender.representedObject];
+}
+- (void)keepAwakeRemoteToggled:(NSSwitch *)sw {
+    [RemoteAccess shared].keepAwake = (sw.state == NSControlStateValueOn);
 }
 - (void)refreshRemotePeers:(id)sender {
     (void)sender;
