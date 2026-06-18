@@ -773,11 +773,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     }
     if (!display.isActive) {
         if (display.logicalWidth > 0) {
-            NSMutableString *line = [NSMutableString stringWithFormat:@"   %@",
+            NSMutableString *line = [NSMutableString stringWithString:
                 ddLogicalString(display.logicalWidth, display.logicalHeight)];
             if (display.isHiDPI) [line appendString:@"  HiDPI"];
             if (display.refreshRate > 0) [line appendFormat:@" · %.0fHz", display.refreshRate];
-            [self addLabelToMenu:menu title:line];
+            [self addInfoRow:menu title:line image:ddSymbol(@"display")];
         }
         [menu addItem:[self actionItem:@"Enable"
                                 action:@selector(enableDisplay:) displayID:display.displayID
@@ -901,13 +901,13 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     WindowTransparency *wt = [WindowTransparency shared];
 
     if (![wt backendAvailable]) {
-        [self addLabelToMenu:menu title:@"backend not loaded"];
+        [self addInfoRow:menu title:@"Backend not loaded" image:ddSymbol(@"exclamationmark.triangle")];
         return;
     }
 
     NSArray<DDAppWindows *> *apps = [wt appsWithWindows];
     if (apps.count == 0) {
-        [self addLabelToMenu:menu title:@"no windows"];
+        [self addInfoRow:menu title:@"No windows" image:ddSymbol(@"macwindow")];
     }
     for (DDAppWindows *app in apps) {
         int pct = 100;

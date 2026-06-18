@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.5.3] — 2026-06-18
+
+### Changed
+- **Row alignment made consistent across the rest of the menu.** The remaining icon-less informational rows now carry icons too, so none read as indented: the **inactive-display info line** (resolution/HiDPI/Hz) and the Transparency **"Backend not loaded"** / **"No windows"** states. The other submenus — Resolution, Force HiDPI, Snap Window, Settings, Keep-Awake durations — already used consistent column/checkmark layouts and were left as-is.
+
 ## [2.5.2] — 2026-06-18
 
 ### Changed
@@ -137,6 +142,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.5.3]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.5.3
 [2.5.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.5.2
 [2.5.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.5.1
 [2.5.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.5.0
