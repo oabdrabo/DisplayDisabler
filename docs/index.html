@@ -7,13 +7,38 @@
 <meta name="theme-color" content="#13151a" />
 <title>DisplayDeck — total control of your Mac's displays</title>
 <meta name="description" content="A tiny macOS menu-bar app: disable screens, force HiDPI, boost brightness past 100%, warm the colors, snap and tile windows, make any window transparent or float, and keep your Mac awake. Free & open source, Apple Silicon." />
+<link rel="canonical" href="https://displaydeck.pyxis3.ai/" />
 <meta property="og:type" content="website" />
-<meta property="og:url" content="https://oabdrabo.github.io/DisplayDeck/" />
-<meta property="og:title" content="DisplayDeck" />
+<meta property="og:site_name" content="DisplayDeck" />
+<meta property="og:url" content="https://displaydeck.pyxis3.ai/" />
+<meta property="og:title" content="DisplayDeck — total control of your Mac's displays" />
 <meta property="og:description" content="Total control of your Mac's displays — from one coffee mug in your menu bar." />
 <meta property="og:image" content="https://oabdrabo.github.io/DisplayDeck/assets/icon.png" />
-<meta name="twitter:card" content="summary" />
+<meta property="og:image:alt" content="DisplayDeck app icon — a coffee mug in the menu bar" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="DisplayDeck — total control of your Mac's displays" />
+<meta name="twitter:description" content="Disable screens, force HiDPI, boost brightness past 100%, warm colors, snap windows, transparency, keep-awake. Free & open source, Apple Silicon." />
+<meta name="twitter:image" content="https://oabdrabo.github.io/DisplayDeck/assets/icon.png" />
 <link rel="icon" type="image/png" href="assets/icon.png" />
+<link rel="apple-touch-icon" href="assets/icon.png" />
+<link rel="manifest" href="site.webmanifest" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "DisplayDeck",
+  "operatingSystem": "macOS 14+",
+  "applicationCategory": "UtilitiesApplication",
+  "processorRequirements": "Apple Silicon",
+  "url": "https://displaydeck.pyxis3.ai/",
+  "downloadUrl": "https://github.com/oabdrabo/DisplayDeck/releases/latest",
+  "softwareVersion": "2.4.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "author": { "@type": "Person", "name": "Omar Abdrabo" },
+  "description": "A tiny macOS menu-bar app: disable screens, force HiDPI, boost brightness past 100%, warm the colors, snap and tile windows, make any window transparent or float, and keep your Mac awake.",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -379,6 +404,33 @@
   // scroll reveal
   const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12});
   document.querySelectorAll('.reveal:not(.in)').forEach(el=>io.observe(el));
+</script>
+<!-- shortlink analytics — only active when served via the displaydeck.pyxis3.ai
+     reverse proxy; stays silent on raw github.io. Host-based attribution
+     (proxy links never carry an sl_cid). -->
+<script>
+(function () {
+  var H = location.hostname;
+  if (!/\.pyxis3\.ai$/.test(H)) return;
+  var cid = new URLSearchParams(location.search).get('sl_cid') || '';
+  var J = function (b) { return new Blob([JSON.stringify(b)], { type: 'application/json' }); };
+  function ev(name, value) {
+    try { navigator.sendBeacon('/api/event', J({ host: H, name: name, value: value || 0, cid: cid })); } catch (e) {}
+  }
+  function conv(label, value) {
+    new Image().src = '/api/conv?host=' + encodeURIComponent(H) + '&label=' + encodeURIComponent(label) + '&value=' + (value || 0) + '&cid=' + cid;
+  }
+  ev('visit');
+  var copybtn = document.getElementById('copybtn');
+  if (copybtn) copybtn.addEventListener('click', function () { ev('copy_install'); }, { passive: true });
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a'); if (!a) return;
+    var h = a.getAttribute('href') || '';
+    if (/brew|releases|\.zip/i.test(h))             { ev('download'); conv('download'); }
+    else if (/stripe\.com|donate|sponsor/i.test(h)) { ev('donate');   conv('donate'); }
+    else if (/github\.com\/oabdrabo\/DisplayDeck/i.test(h)) ev('github');
+  }, true);
+})();
 </script>
 </body>
 </html>

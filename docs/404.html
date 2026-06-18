@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#13151a" />
+<meta name="robots" content="noindex" />
+<title>Not found — DisplayDeck</title>
+<link rel="icon" type="image/png" href="/assets/icon.png" />
+<style>
+  html,body{height:100%}
+  body{margin:0;display:grid;place-items:center;min-height:100%;
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    background:#13151a;color:#eceef2;text-align:center;padding:2rem}
+  .wrap{max-width:30rem}
+  img{width:72px;height:72px;border-radius:18px;margin-bottom:1.25rem}
+  h1{font-size:2.5rem;margin:.25rem 0;letter-spacing:-.02em}
+  p{color:#888f9e;margin:.5rem 0 1.75rem}
+  a.btn{display:inline-block;padding:.7rem 1.4rem;border-radius:10px;
+    background:#f0a24a;color:#13151a;font-weight:700;text-decoration:none}
+  a.btn:hover{filter:brightness(1.05)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <img src="/assets/icon.png" alt="DisplayDeck" />
+    <h1>404</h1>
+    <p>That page wandered off. Let's get you back to DisplayDeck.</p>
+    <a class="btn" href="/">Back home</a>
+  </div>
+  <script>
+  (function () {
+    var H = location.hostname;
+    if (!/\.pyxis3\.ai$/.test(H)) return;
+    try { navigator.sendBeacon('/api/event', new Blob([JSON.stringify({ host: H, name: 'not_found', meta: { path: location.pathname } })], { type: 'application/json' })); } catch (e) {}
+  })();
+  </script>
+</body>
+</html>

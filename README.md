@@ -12,7 +12,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 [![Platform](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple&logoColor=white)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-555?style=flat-square)](#-requirements)
 [![Objective-C](https://img.shields.io/badge/Objective--C-438eff?style=flat-square)](#-how-it-works)
-[![Website](https://img.shields.io/badge/website-635bff?style=flat-square&logo=githubpages&logoColor=white)](https://oabdrabo.github.io/DisplayDeck/)
+[![Website](https://img.shields.io/badge/displaydeck.pyxis3.ai-635bff?style=flat-square&logo=githubpages&logoColor=white)](https://displaydeck.pyxis3.ai/?utm_source=github&utm_medium=readme&utm_campaign=displaydeck)
 
 <sub>
 
