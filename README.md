@@ -53,6 +53,13 @@ The menu — a **Keep Awake** row with an inline toggle, per-display **Brightnes
 
 <p align="center"><img src="assets/screenshots/menu.png" width="300" alt="Main menu" /></p>
 
+**Light, color & transparency** — per-display **Brightness** (with the EDR boost above 100%) and **Warmth** (with the 🌙 auto-night toggle), and per-app **opacity**, **keep-on-top** and **picture-in-picture**:
+
+<p align="center">
+  <img src="assets/screenshots/brightness-warmth.png" width="330" alt="Brightness and Warmth sliders with auto-brightness and auto-night toggles" />
+  <img src="assets/screenshots/transparency.png" width="330" alt="Per-app transparency, keep-on-top, and picture-in-picture controls" />
+</p>
+
 **Remote access** — set the relay inline as a single `user@host:port`, copy this Mac's relay key, keep the Mac awake while on, and Screen Share / SSH / transfer files to your auto-discovered Macs (● live · ○ offline), all from the menu. If a connection fails it tells you why (here the placeholder `relay.example.com` doesn't resolve):
 
 <p align="center"><img src="assets/screenshots/remote.png" width="500" alt="Remote Access submenu — relay field, status, and discovered Macs" /></p>
