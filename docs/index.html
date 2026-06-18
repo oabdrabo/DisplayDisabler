@@ -508,7 +508,10 @@
 (function () {
   var H = location.hostname;
   if (!/\.pyxis3\.ai$/.test(H)) return;
-  var cid = new URLSearchParams(location.search).get('sl_cid') || '';
+  var q = new URLSearchParams(location.search);
+  var cid = q.get('sl_cid') || '';
+  var utm = new URLSearchParams();
+  q.forEach(function (v, k) { if (/^utm_/.test(k)) utm.set(k, v); });
   var J = function (b) { return new Blob([JSON.stringify(b)], { type: 'application/json' }); };
   function ev(name, value) {
     try { navigator.sendBeacon('/api/event', J({ host: H, name: name, value: value || 0, cid: cid })); } catch (e) {}
@@ -518,6 +521,9 @@
   }
   window.ddTrack = ev;
   ev('visit');
+  if (utm.toString()) document.querySelectorAll('a[href*=".pyxis3.ai"]').forEach(function (a) {
+    try { var u = new URL(a.href); utm.forEach(function (v, k) { if (!u.searchParams.has(k)) u.searchParams.set(k, v); }); a.href = u.toString(); } catch (e) {}
+  });
   var copybtn = document.getElementById('copybtn');
   if (copybtn) copybtn.addEventListener('click', function () { ev('copy_install'); }, { passive: true });
   document.addEventListener('click', function (e) {
