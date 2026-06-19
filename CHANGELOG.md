@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.7.2] — 2026-06-19
+
+### Changed
+- **The Text smoothing toggle now tells you it needs a re-login.** macOS only reads the font-smoothing setting when an app *launches*, so flipping the toggle did nothing visible in already-open windows — it read as a dead switch. Added a caption under it: "Takes effect after you log back in." (What the toggle does is unchanged; on a Retina display the effect is subtle regardless.)
+
 ## [2.7.1] — 2026-06-19
 
 ### Changed
@@ -171,6 +176,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.7.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.7.2
 [2.7.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.7.1
 [2.7.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.7.0
 [2.6.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.6.2

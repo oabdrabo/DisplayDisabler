@@ -342,6 +342,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [menu addItem:[self switchRow:@"Text smoothing" icon:@"textformat.size"
                                on:([self currentFontSmoothing] != 0)
                            action:@selector(fontSmoothingToggled:) width:kSliderRowWidth]];
+    // Apps read AppleFontSmoothing only at launch, so the toggle has no visible
+    // effect until you log back in — say so, or it reads as a dead switch.
+    [self addLabelToMenu:menu title:@"Takes effect after you log back in"];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
         initWithTitle:@"Settings" action:nil keyEquivalent:@""];
