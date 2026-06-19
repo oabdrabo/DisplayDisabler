@@ -148,18 +148,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
 
 - (BOOL)isConfigured { return self.relayHost.length > 0; }
 
-- (void)setRelayHost:(NSString *)host {
-    [[NSUserDefaults standardUserDefaults] setObject:(host ?: @"") forKey:kRelayHostKey];
-    [self reconnect];
-}
-- (void)setRelayUser:(NSString *)user {
-    [[NSUserDefaults standardUserDefaults] setObject:(user.length ? user : kDefaultRelayUser) forKey:kRelayUserKey];
-    [self reconnect];
-}
-- (void)setRelayPort:(NSString *)port {
-    [[NSUserDefaults standardUserDefaults] setObject:(port.length ? port : kDefaultRelayPort) forKey:kRelayPortKey];
-    [self reconnect];
-}
 - (void)setRelayHost:(NSString *)host user:(NSString *)user port:(NSString *)port {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     [d setObject:(host ?: @"") forKey:kRelayHostKey];

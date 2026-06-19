@@ -2,6 +2,11 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.7.1] — 2026-06-19
+
+### Changed
+- **Internal cleanup only — no user-facing change.** Removed dead code carried since earlier releases: an unused virtual-display termination handler (and its deferred-teardown bookkeeping) and three unused single-field relay setters. Behaviour is identical to 2.7.0.
+
 ## [2.7.0] — 2026-06-18
 
 ### Changed
@@ -166,6 +171,7 @@ All notable changes to DisplayDeck are documented here. Format follows [Keep a C
 ### Added
 - Initial release: disable/enable any display, Force HiDPI via a mirrored virtual display, brightness control, and keep-awake.
 
+[2.7.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.7.1
 [2.7.0]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.7.0
 [2.6.2]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.6.2
 [2.6.1]: https://github.com/oabdrabo/DisplayDeck/releases/tag/v2.6.1

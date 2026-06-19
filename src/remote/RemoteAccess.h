@@ -21,7 +21,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)enable;
 - (void)disable;
 
-- (nullable NSString *)publicKey;        // the key to authorize on the relay
 - (int)sshPort;                          // relay loopback port → this Mac's 22
 - (int)vncPort;                          // relay loopback port → this Mac's 5900
 - (NSString *)relayHost;
@@ -31,10 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)isConfigured;                    // a relay host is set
 
 // Configure the relay (persisted; reconnects live if enabled).
-- (void)setRelayHost:(NSString *)host;
-- (void)setRelayUser:(NSString *)user;
-- (void)setRelayPort:(NSString *)port;
-- (void)setRelayHost:(NSString *)host user:(nullable NSString *)user port:(nullable NSString *)port;  // all at once
+- (void)setRelayHost:(NSString *)host user:(nullable NSString *)user port:(nullable NSString *)port;
 
 // --- Client: connect to your *other* Macs through the same relay ---
 // Peers are auto-discovered: a read-only "list-peers" command on the relay

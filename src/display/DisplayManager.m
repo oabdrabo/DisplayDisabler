@@ -125,10 +125,8 @@ typedef CGError (^DisplayConfigBlock)(CGDisplayConfigRef config);
 @property (nonatomic, strong) NSDictionary<NSNumber *, NSValue *> *preForceTopology;
 @property (nonatomic) BOOL realignInFlight;
 @property (nonatomic) BOOL applyingForce;
-@property (nonatomic) BOOL vdTerminationDeferred;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, DDDisplayInfo *> *disabledInfos;
 - (void)scheduleChangeNotification;
-- (void)handleSharedVirtualDisplayTerminated;
 - (void)clearForceState;
 @end
 
@@ -256,18 +254,6 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     self.forcedTarget     = nil;
     self.preForceMode     = nil;
     self.preForceTopology = nil;
-}
-
-- (void)handleSharedVirtualDisplayTerminated {
-    if (!self.sharedVirtualDisplay) return;
-    if (self.applyingForce) {
-        self.vdTerminationDeferred = YES;
-        return;
-    }
-    self.sharedVirtualDisplay = nil;
-    [self clearForceState];
-    NSLog(@"DisplayDeck: Shared virtual display terminated externally.");
-    [self scheduleChangeNotification];
 }
 
 - (void)unmirrorDisplay:(CGDirectDisplayID)displayID {
@@ -725,13 +711,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     __weak __typeof(self) weakSelf = self;
     DDForceHiDPICompletion deliver = ^(BOOL success, NSError *error) {
         __strong __typeof(weakSelf) strong = weakSelf;
-        if (strong) {
-            strong.applyingForce = NO;
-            if (strong.vdTerminationDeferred) {
-                strong.vdTerminationDeferred = NO;
-                [strong handleSharedVirtualDisplayTerminated];
-            }
-        }
+        if (strong) strong.applyingForce = NO;
         if (!completion) return;
         dispatch_async(dispatch_get_main_queue(), ^{ completion(success, error); });
     };
@@ -890,13 +870,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     deliver(YES, nil);
 
     } @finally {
-        if (self.applyingForce) {
-            self.applyingForce = NO;
-            if (self.vdTerminationDeferred) {
-                self.vdTerminationDeferred = NO;
-                [self handleSharedVirtualDisplayTerminated];
-            }
-        }
+        self.applyingForce = NO;
     }
 }
 
@@ -1132,9 +1106,9 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     [self destroySharedVirtualDisplay];
 }
 
-// Tear down the shared virtual display and drop our reference. Setting the ivar to
-// nil first means a termination callback (handleSharedVirtualDisplayTerminated)
-// sees no display and no-ops, so we never double-free.
+// Tear down the shared virtual display and drop our reference. Dropping the ivar
+// before -destroy means a re-entrant call hits the guard below and no-ops, so we
+// never double-free.
 - (void)destroySharedVirtualDisplay {
     if (!self.sharedVirtualDisplay) return;
     SLVirtualDisplay *vd = self.sharedVirtualDisplay;
