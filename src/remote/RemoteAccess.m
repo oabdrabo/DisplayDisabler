@@ -3,17 +3,16 @@
 #import <IOKit/pwr_mgt/IOPMLib.h>
 
 static NSString *const kEnabledKey  = @"RemoteAccessEnabled";
-static NSString *const kServicesKey = @"RemoteServicesEnabled";   // services already turned on once
+static NSString *const kServicesKey = @"RemoteServicesEnabled";
 static NSString *const kRelayHostKey = @"RemoteRelayHost";
 static NSString *const kRelayUserKey = @"RemoteRelayUser";
 static NSString *const kRelayPortKey = @"RemoteRelayPort";
 static NSString *const kKeepAwakeKey = @"RemoteKeepAwake";
 
-static NSString *const kDefaultRelayHost = @"";          // unset by default — user configures
+static NSString *const kDefaultRelayHost = @"";
 static NSString *const kDefaultRelayUser = @"tunnel";
 static NSString *const kDefaultRelayPort = @"22";
 
-// Boil ssh's stderr down to one human-readable cause so the menu can say *why*.
 static NSString *ddFriendlyTunnelError(NSString *raw) {
     if (raw.length == 0) return nil;
     NSString *low = raw.lowercaseString;
@@ -37,9 +36,9 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
 @property (nonatomic, copy, nullable) NSString *lastError;
 @property (nonatomic, strong) dispatch_queue_t q;
 @property (nonatomic) NSTimeInterval backoff;
-@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTask *> *forwards;  // localPort → ssh -L
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSTask *> *forwards;
 @property (nonatomic, strong) NSArray<NSDictionary *> *cachedPeers;
-@property (nonatomic) IOPMAssertionID sleepAssertion;   // 0 = none held
+@property (nonatomic) IOPMAssertionID sleepAssertion;
 @end
 
 @implementation RemoteAccess
@@ -82,15 +81,13 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
 
 - (BOOL)keepAwake {
     NSNumber *v = [[NSUserDefaults standardUserDefaults] objectForKey:kKeepAwakeKey];
-    return v ? v.boolValue : YES;   // default ON — stay reachable while remote access is up
+    return v ? v.boolValue : YES;
 }
 - (void)setKeepAwake:(BOOL)keepAwake {
     [[NSUserDefaults standardUserDefaults] setBool:keepAwake forKey:kKeepAwakeKey];
     [self updateSleepAssertion];
 }
 
-// Hold an idle-sleep assertion while remote access is on, so the Mac doesn't doze
-// off and drop the tunnel. Idle-sleep only — a closed laptop lid still sleeps.
 - (void)updateSleepAssertion {
     BOOL want = self.isEnabled && self.keepAwake;
     if (want && self.sleepAssertion == 0) {
@@ -102,7 +99,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     }
 }
 
-// Stable per-Mac loopback ports on the relay, derived from the host name.
 - (int)portWithBase:(int)base {
     NSString *name = [[NSHost currentHost] localizedName] ?: NSUserName();
     NSUInteger h = name.hash % 1500;
@@ -132,10 +128,7 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
 }
 
 - (NSString *)authorizeLine {
-    // Two lines for the relay's authorized_keys:
-    //  1) the forwarding key — reverse tunnel locked to this Mac's ports
-    //     (permitlisten), local forwarding open so it can also be a client.
-    //  2) the discovery key — forced read-only list-peers command, nothing else.
+
     [self ensureDiscoveryKey];
     NSString *fwd = [NSString stringWithFormat:
         @"restrict,port-forwarding,permitlisten=\"%d\",permitlisten=\"%d\" %@",
@@ -156,8 +149,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     [self reconnect];
 }
 
-// Pick up new relay settings live: drop the current tunnel; the termination
-// handler relaunches it (reading the fresh config). No-op if not enabled.
 - (void)reconnect {
     if (!self.isEnabled) return;
     dispatch_async(self.q, ^{
@@ -196,7 +187,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
-// Ask the relay's read-only list-peers command for every authorized Mac, cache it.
 - (void)refreshPeers {
     if (!self.isConfigured || ![self ensureDiscoveryKey]) return;
     dispatch_async(self.q, ^{
@@ -228,13 +218,13 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
             if (f.count < 3) continue;
             int ssh = f[1].intValue, vnc = f[2].intValue;
             if (ssh <= 0) continue;
-            BOOL online = (f.count >= 4 && f[3].intValue != 0);   // 4th field = live flag
+            BOOL online = (f.count >= 4 && f[3].intValue != 0);
             [found addObject:@{ @"name": f[0].length ? f[0] : @"Mac",
                                 @"user": NSUserName(),
                                 @"ssh": @(ssh), @"vnc": @(vnc), @"online": @(online),
-                                @"self": @(ssh == selfSsh) }];   // include this Mac, flagged
+                                @"self": @(ssh == selfSsh) }];
         }
-        if ([found isEqualToArray:(self.cachedPeers ?: @[])]) return;   // no change → no rebuild
+        if ([found isEqualToArray:(self.cachedPeers ?: @[])]) return;
         self.cachedPeers = found;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (self.onPeersChanged) self.onPeersChanged();
@@ -242,15 +232,12 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     });
 }
 
-// Common ssh args to reach the relay with only our key.
 - (NSArray<NSString *> *)relayBaseArgs {
     return @[ @"-i", [self keyPath], @"-o", @"IdentitiesOnly=yes",
               @"-o", @"StrictHostKeyChecking=accept-new",
               @"-o", [NSString stringWithFormat:@"UserKnownHostsFile=%@", [self knownHosts]] ];
 }
 
-// Open Screen Sharing to a peer: hold an ssh -L from a local port → relay's
-// loopback port that the peer reverse-forwarded its :5900 onto, then open vnc://.
 - (void)screenSharePeer:(NSDictionary *)peer {
     int vnc = [peer[@"vnc"] intValue];
     if (vnc <= 0) return;
@@ -279,7 +266,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     });
 }
 
-// Open an SSH session to a peer in Terminal (ProxyJump through the relay).
 - (void)sshPeer:(NSDictionary *)peer {
     int ssh = [peer[@"ssh"] intValue];
     if (ssh <= 0) return;
@@ -294,7 +280,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     if (err) NSLog(@"DisplayDeck: ssh peer failed: %@", err);
 }
 
-// Open an SFTP (file transfer) session to a peer in Terminal, over the same relay.
 - (void)sftpPeer:(NSDictionary *)peer {
     int ssh = [peer[@"ssh"] intValue];
     if (ssh <= 0) return;
@@ -348,8 +333,6 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     if (self.sleepAssertion != 0) { IOPMAssertionRelease(self.sleepAssertion); self.sleepAssertion = 0; }
 }
 
-// Enable Remote Login + Screen Sharing once (single admin prompt). Best-effort:
-// if it fails, the tunnel still runs; the user can enable the services manually.
 - (void)enableServicesIfNeeded {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kServicesKey]) return;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -374,14 +357,14 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
 
 - (void)launchTunnelLocked {
     if (!self.isEnabled) return;
-    if (self.relayHost.length == 0) return;   // not configured yet
+    if (self.relayHost.length == 0) return;
     if (self.task.isRunning) return;
 
     NSTask *t = [[NSTask alloc] init];
     t.launchPath = @"/usr/bin/ssh";
     t.arguments = @[
         @"-i", [self keyPath],
-        @"-o", @"IdentitiesOnly=yes",   // offer ONLY our key (avoids tripping fail2ban)
+        @"-o", @"IdentitiesOnly=yes",
         @"-N", @"-T",
         @"-o", @"ExitOnForwardFailure=yes",
         @"-o", @"ServerAliveInterval=30",
@@ -411,7 +394,7 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
                 if (why) self.lastError = why;
             });
             if (!self.isEnabled) return;
-            // exponential backoff, capped — survive relay reboots / network drops
+
             NSTimeInterval delay = self.backoff;
             self.backoff = MIN(self.backoff * 1.6, 30.0);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
@@ -422,7 +405,7 @@ static NSString *ddFriendlyTunnelError(NSString *raw) {
     @try {
         [t launch];
         self.task = t;
-        // If it stays up a few seconds, consider it connected and reset backoff.
+
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), self.q, ^{
             if (self.task == t && t.isRunning) {
                 self.backoff = 2.0;

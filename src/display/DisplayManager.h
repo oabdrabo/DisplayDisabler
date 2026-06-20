@@ -54,9 +54,8 @@ typedef void (^DDForceHiDPICompletion)(BOOL success, NSError * _Nullable error);
 
 + (instancetype)shared;
 
-// Largest HiDPI framebuffer (rendered = 2x logical) this Mac's GPU can comfortably
-// drive, derived from the Metal device's memory budget. Used to gate Force HiDPI.
 + (CGSize)maxHiDPIFramebuffer;
++ (NSArray<NSValue *> *)hidpiLogicalSizesForPanel:(CGSize)panelPixels;
 
 - (NSArray<DDDisplayInfo *> *)allDisplays;
 - (NSArray<DDDisplayMode *> *)modesForDisplay:(CGDirectDisplayID)displayID;

@@ -4,16 +4,6 @@
 #import <AppKit/AppKit.h>
 #import <IOKit/IOKitLib.h>
 #include <arpa/inet.h>
-#include <math.h>
-
-static const double kInjectorFullPanelScales[] =
-    { 0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 1.75, 2.0 };
-static const size_t kInjectorFullPanelScaleCount =
-    sizeof(kInjectorFullPanelScales) / sizeof(*kInjectorFullPanelScales);
-// HiDPI renders at 2x the logical size — gate by a rendered-framebuffer ceiling
-// that auto-tunes to the GPU (DisplayManager +maxHiDPIFramebuffer), so small/2K
-// panels get more options while big panels stay protected from huge buffers.
-static const size_t kInjectorMinLogicalW = 800;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -44,38 +34,13 @@ static NSData *entry8(NSUInteger logicalW, NSUInteger logicalH) {
 
 - (NSArray<NSValue *> *)defaultResolutionsForDisplay:(CGDirectDisplayID)displayID {
     CGSize panel = [[DisplayManager shared] nativePanelPixelsForDisplay:displayID];
-    if (panel.width <= 0 || panel.height <= 0) return @[];
-
-    NSMutableArray<NSValue *> *out = [NSMutableArray arrayWithCapacity:kInjectorFullPanelScaleCount];
-    NSMutableSet<NSString *> *seen = [NSMutableSet set];
-    for (size_t i = 0; i < kInjectorFullPanelScaleCount; i++) {
-        size_t lw = (size_t)round(panel.width  * kInjectorFullPanelScales[i] / 2.0) * 2;
-        size_t lh = (size_t)round(panel.height * kInjectorFullPanelScales[i] / 2.0) * 2;
-        if (lw == 0 || lh == 0) continue;
-        if (lw < kInjectorMinLogicalW) continue;
-        CGSize fbCap = [DisplayManager maxHiDPIFramebuffer];
-        if (lw * 2 > (size_t)fbCap.width || lh * 2 > (size_t)fbCap.height) continue;
-        NSString *key = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
-        if ([seen containsObject:key]) continue;
-        [seen addObject:key];
-        [out addObject:[NSValue valueWithSize:NSMakeSize(lw, lh)]];
-    }
-    return out;
-}
-
-- (void)productAttributesForDisplay:(CGDirectDisplayID)displayID
-                             vendor:(uint32_t *)outVendor
-                            product:(uint32_t *)outProduct {
-    *outVendor  = CGDisplayVendorNumber(displayID);
-    *outProduct = CGDisplayModelNumber(displayID);
+    return [DisplayManager hidpiLogicalSizesForPanel:panel];
 }
 
 - (NSString *)overridePathUnderRoot:(NSString *)root
                          forDisplay:(CGDirectDisplayID)displayID {
-    uint32_t vendor = 0, product = 0;
-    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
     return [NSString stringWithFormat:@"%@/DisplayVendorID-%x/DisplayProductID-%x",
-            root, vendor, product];
+            root, CGDisplayVendorNumber(displayID), CGDisplayModelNumber(displayID)];
 }
 
 - (NSString *)overridePathForDisplay:(CGDirectDisplayID)displayID {
@@ -107,8 +72,8 @@ static NSData *entry8(NSUInteger logicalW, NSUInteger logicalH) {
 
 - (NSDictionary *)mergedPlistDictForDisplay:(CGDirectDisplayID)displayID
                                 resolutions:(NSArray<NSValue *> *)sizes {
-    uint32_t vendor = 0, product = 0;
-    [self productAttributesForDisplay:displayID vendor:&vendor product:&product];
+    uint32_t vendor  = CGDisplayVendorNumber(displayID);
+    uint32_t product = CGDisplayModelNumber(displayID);
 
     NSDictionary *apple = [self loadSystemOverrideForDisplay:displayID];
     NSMutableDictionary *out = [NSMutableDictionary dictionary];

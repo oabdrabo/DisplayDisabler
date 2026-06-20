@@ -1,13 +1,3 @@
-// ddshot — capture the live DisplayDeck status-bar menu (and an optional submenu)
-// with rounded corners + shadow, via screencapture's window mode.
-//
-//   ddshot <out.png>                  capture the main menu
-//   ddshot <out.png> "<row substr>"   open the menu, hover the matching row, then
-//                                      capture the submenu it spawns
-//
-// Uses only public APIs: CGEvent (synthesize the right-click), the Accessibility
-// API (read row bounds / hover), and `screencapture -l<windowID>`. Requires the
-// terminal/tool to have Accessibility + Screen Recording permission.
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 
@@ -19,7 +9,6 @@ static pid_t ddPID(void) {
     return -1;
 }
 
-// On-screen windows owned by pid at the given CoreGraphics window layer.
 static NSArray *windowsForPID(pid_t pid, int layer) {
     CFArrayRef list = CGWindowListCopyWindowInfo(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
@@ -53,9 +42,8 @@ static void moveMouse(CGPoint p) {
     CFRelease(m);
 }
 
-// Close any open menu so the next invocation starts from a clean state.
 static void dismiss(void) {
-    CGEventRef d = CGEventCreateKeyboardEvent(NULL, 53, true);   // Escape
+    CGEventRef d = CGEventCreateKeyboardEvent(NULL, 53, true);
     CGEventRef u = CGEventCreateKeyboardEvent(NULL, 53, false);
     CGEventPost(kCGHIDEventTap, d); usleep(40000);
     CGEventPost(kCGHIDEventTap, u);
@@ -80,7 +68,6 @@ int main(int argc, const char **argv) { @autoreleasepool {
     pid_t pid = ddPID();
     if (pid < 0) { fprintf(stderr, "DisplayDeck not running\n"); return 1; }
 
-    // 1. find the status item via the app's extras menu bar (AXMenuBarItem)
     AXUIElementRef app = AXUIElementCreateApplication(pid);
     CFTypeRef extras = NULL;
     AXUIElementCopyAttributeValue(app, CFSTR("AXExtrasMenuBar"), &extras);
@@ -98,21 +85,19 @@ int main(int argc, const char **argv) { @autoreleasepool {
     rightClick(CGPointMake(sp.x + ss.width/2, sp.y + ss.height/2));
     usleep(450000);
 
-    // 2. the menu is a layer-101 (pop-up menu) window owned by us
     NSArray *menus = windowsForPID(pid, 101);
     if (!menus.count) { fprintf(stderr, "menu didn't open\n"); return 1; }
-    // leftmost = main menu
+
     NSDictionary *mainMenu = menus.firstObject;
     for (NSDictionary *w in menus)
         if (rectOf(w).origin.x < rectOf(mainMenu).origin.x) mainMenu = w;
 
     if (!hover) { capture(mainMenu, out); usleep(150000); dismiss(); return 0; }
 
-    // 3. hover the matching row to spawn its submenu, via the Accessibility tree
     CGRect mm = rectOf(mainMenu);
     AXUIElementRef menuEl = NULL;
     AXUIElementCopyElementAtPosition(app, CGRectGetMidX(mm), mm.origin.y + 12, &menuEl);
-    // walk up to the AXMenu
+
     while (menuEl) {
         CFTypeRef role = NULL;
         AXUIElementCopyAttributeValue(menuEl, kAXRoleAttribute, &role);
@@ -149,7 +134,6 @@ int main(int argc, const char **argv) { @autoreleasepool {
     }
     CFRelease(app);
 
-    // 4. the submenu is the rightmost layer-101 window now on screen
     NSArray *now = windowsForPID(pid, 101);
     NSDictionary *sub = now.firstObject;
     for (NSDictionary *w in now)

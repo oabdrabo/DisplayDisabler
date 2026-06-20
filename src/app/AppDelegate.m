@@ -5,6 +5,7 @@
 #import "WindowTransparency.h"
 #import "WindowPiP.h"
 #import "WindowManager.h"
+#import "AXWindow.h"
 #import "RemoteAccess.h"
 #import "BrightnessBooster.h"
 #import "ColorTemperature.h"
@@ -23,7 +24,6 @@ static NSString * const kSnapShortcuts      = @"WindowSnapShortcuts";
 static NSString * const kSnapDrag           = @"WindowSnapDrag";
 
 static NSString * const kAutoManageNotifID = @"auto-manage";
-
 
 static const CGFloat kModeTabType = 112;
 static const CGFloat kModeTabRate = 184;
@@ -58,14 +58,8 @@ static NSImage *ddTintedSymbol(NSString *name, NSColor *color) {
             imageWithSymbolConfiguration:cfg];
 }
 
-// A little "screen with the snapped region shaded" glyph for the Window menu,
-// like Rectangle/Magnet. Template image: the faint full-screen rect (low alpha)
-// reads as empty, the solid region (full alpha) is where the window goes — both
-// tint with the menu text colour, so it adapts to light/dark. `r` is normalised
-// (0..1, y-up = visually top).
 static NSImage *ddSnapGlyph(CGRect r) {
-    // 24×16 → inner screen 21×13 ≈ 16:10, matching a real Mac display (not the
-    // wide ~16:9 the previous 26-wide size produced).
+
     NSImage *img = [NSImage imageWithSize:NSMakeSize(24, 16) flipped:NO
                             drawingHandler:^BOOL(NSRect dst) {
         NSRect screen = NSInsetRect(dst, 1.5, 1.5);
@@ -113,9 +107,6 @@ static NSImage *ddSnapGlyphForLayout(DDSnap l) {
 static const void *kDDOffSymKey = &kDDOffSymKey;
 static const void *kDDOnSymKey  = &kDDOnSymKey;
 
-// Reflect a row toggle's on/off state: accent-tinted "on" symbol when active,
-// muted symbol when off. (alternateImage doesn't render reliably for the On
-// state of a borderless image button, so we set the image explicitly.)
 static void ddSetToggle(NSButton *b, BOOL on) {
     NSString *offSym = objc_getAssociatedObject(b, kDDOffSymKey);
     NSString *onSym  = objc_getAssociatedObject(b, kDDOnSymKey);
@@ -201,8 +192,8 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [[ColorTemperature shared] restoreAll];
     [[WindowPiP shared] restoreAll];
     if ([[WindowTransparency shared] backendAvailable])
-        [[WindowTransparency shared] resetAllWindows:NULL];   // don't leave windows transparent
-    [[RemoteAccess shared] shutdown];                         // don't orphan the ssh tunnel
+        [[WindowTransparency shared] resetAllWindows:NULL];
+    [[RemoteAccess shared] shutdown];
     [self.displayManager cleanUpAllVirtualDisplays];
     [self.displayManager stopMonitoring];
 }
@@ -286,18 +277,14 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                               accessibilityDescription:@"DisplayDeck"];
     [icon setTemplate:YES];
 
-    // Scale the glyph to the *actual* menu-bar height instead of a fixed point
-    // size, so it fits every Mac — notched or standard, internal or external —
-    // and never looks oversized or clipped. ~58% of the bar thickness matches the
-    // system's own menu-bar glyphs.
     CGFloat h = round([NSStatusBar systemStatusBar].thickness * 0.58);
-    h = MAX(15, MIN(18, h));   // clamp to the standard menu-bar glyph range
+    h = MAX(15, MIN(18, h));
     NSSize s = icon.size;
     if (s.height > 0) icon.size = NSMakeSize(round(s.width * h / s.height), h);
 
     NSStatusBarButton *button = self.statusItem.button;
     button.image = icon;
-    button.imageScaling = NSImageScaleProportionallyDown;  // safety net: shrink, never crop
+    button.imageScaling = NSImageScaleProportionallyDown;
 }
 
 - (void)statusItemClicked:(id)sender {
@@ -338,12 +325,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [self addTransparencySectionToMenu:menu];
 
     [menu addItem:[NSMenuItem separatorItem]];
-    // Absent key = macOS default (smoothing on) → toggle reads as On unless explicitly 0.
+
     [menu addItem:[self switchRow:@"Text smoothing" icon:@"textformat.size"
                                on:([self currentFontSmoothing] != 0)
                            action:@selector(fontSmoothingToggled:) width:kSliderRowWidth]];
-    // Apps read AppleFontSmoothing only at launch, so the toggle has no visible
-    // effect until you log back in — say so, or it reads as a dead switch.
+
     [self addLabelToMenu:menu title:@"Takes effect after you log back in"];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc]
@@ -368,7 +354,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)addKeepAwakeSectionToMenu:(NSMenu *)menu {
     Caffeine *caf = [Caffeine shared];
 
-    // Submenu: timed durations (opened via the chevron / hover).
     NSMenu *m = [[NSMenu alloc] init];
     m.autoenablesItems = NO;
     if (caf.active && caf.expiry) {
@@ -389,14 +374,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [m addItem:di];
     }
 
-    // Single top-level row: icon + "Keep Awake" + on/off toggle, with a ▸ chevron
-    // opening the duration submenu. The switch lives on the main row.
     [menu addItem:[self toggleRow:@"Keep Awake" icon:@"mug" on:caf.active
                            action:@selector(keepAwakeSwitchToggled:) submenu:m]];
 }
 
-// A main-menu row carrying its own on/off NSSwitch *and* a ▸ chevron that opens a
-// submenu. Tagged so the menu-width sizing pass stretches it flush-right.
 - (NSMenuItem *)toggleRow:(NSString *)label icon:(NSString *)symbol
                        on:(BOOL)on action:(SEL)action submenu:(NSMenu *)submenu {
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kSliderRowWidth, 28)];
@@ -440,7 +421,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     ]];
 
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:label action:nil keyEquivalent:@""];
-    item.tag = kSliderItemTag;   // sized to the main-menu width
+    item.tag = kSliderItemTag;
     item.view = row;
     item.submenu = submenu;
     return item;
@@ -454,9 +435,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)keepAwakeSwitchToggled:(NSSwitch *)sw {
     Caffeine *caf = [Caffeine shared];
     if (sw.state == NSControlStateValueOn) {
-        if (!caf.active) [caf toggle];   // on → keep awake indefinitely
+        if (!caf.active) [caf toggle];
     } else {
-        [caf deactivate];                // off → stop (timed or indefinite)
+        [caf deactivate];
     }
 }
 
@@ -481,8 +462,19 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     return it;
 }
 
+- (NSMenuItem *)arrangeItem:(NSString *)title command:(DDArrange)cmd key:(NSString *)key image:(NSString *)symbol {
+    NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:title
+                                                action:@selector(arrangeMenu:) keyEquivalent:key];
+    it.keyEquivalentModifierMask =
+        NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift;
+    it.target = self;
+    it.representedObject = @(cmd);
+    it.image = ddSymbol(symbol);
+    return it;
+}
+
 - (void)addWindowSectionToMenu:(NSMenu *)menu {
-    if (![[WindowManager shared] hasAccessibility]) {
+    if (!DDAXTrusted()) {
         NSMenuItem *grant = [[NSMenuItem alloc]
             initWithTitle:@"Enable Snapping…"
                    action:@selector(grantWindowAccess:) keyEquivalent:@""];
@@ -529,15 +521,41 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
     root.submenu = sm;
     [menu addItem:root];
+
+    NSMenuItem *aroot = [[NSMenuItem alloc] initWithTitle:@"Arrange Windows"
+                                                   action:nil keyEquivalent:@""];
+    aroot.image = ddSymbol(@"square.grid.2x2");
+    NSMenu *am = [[NSMenu alloc] init];
+    am.autoenablesItems = NO;
+
+    NSString *space = @" ";
+    NSString *ret   = @"\r";
+    NSString *rt    = [NSString stringWithFormat:@"%C", (unichar)NSRightArrowFunctionKey];
+    NSString *lf    = [NSString stringWithFormat:@"%C", (unichar)NSLeftArrowFunctionKey];
+    [am addItem:[self arrangeItem:@"Grid 2×2"          command:DDArrangeGrid     key:@"g"  image:@"square.grid.2x2"]];
+    [am addItem:[self arrangeItem:@"Centered over Grid" command:DDArrangeCentered key:@"c"  image:@"macwindow"]];
+    [am addItem:[NSMenuItem separatorItem]];
+    [am addItem:[self arrangeItem:@"Cycle Layout"       command:DDArrangeCycle    key:space image:@"arrow.triangle.2.circlepath"]];
+    [am addItem:[self arrangeItem:@"Promote to Main"    command:DDArrangePromote  key:ret   image:@"arrow.up.square"]];
+    [am addItem:[self arrangeItem:@"Center Next"        command:DDArrangeRotateNext key:rt  image:@"arrow.right.circle"]];
+    [am addItem:[self arrangeItem:@"Center Previous"    command:DDArrangeRotatePrev key:lf  image:@"arrow.left.circle"]];
+    [am addItem:[self arrangeItem:@"Restore"            command:DDArrangeRestore  key:@"z"  image:@"arrow.uturn.backward"]];
+
+    aroot.submenu = am;
+    [menu addItem:aroot];
 }
 
 - (void)snapMenu:(NSMenuItem *)sender {
     [[WindowManager shared] snap:(DDSnap)[sender.representedObject integerValue]];
 }
 
+- (void)arrangeMenu:(NSMenuItem *)sender {
+    [[WindowManager shared] arrange:(DDArrange)[sender.representedObject integerValue]];
+}
+
 - (void)grantWindowAccess:(id)sender {
     (void)sender;
-    [[WindowManager shared] requestAccessibility];
+    DDAXRequestTrust();
 }
 
 #pragma mark - Remote access
@@ -545,12 +563,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 - (void)addRemoteSectionToMenu:(NSMenu *)menu {
     RemoteAccess *ra = [RemoteAccess shared];
 
-    // The on/off toggle rides the main "Remote Access" row; everything else lives
-    // in the submenu that the ▸ chevron opens — no further nesting.
     NSMenu *m = [[NSMenu alloc] init];
     m.autoenablesItems = NO;
 
-    // Relay (inline, full-width field)
     [m addItem:[NSMenuItem sectionHeaderWithTitle:@"Relay"]];
     NSString *endpoint = ra.isConfigured
         ? [NSString stringWithFormat:@"%@@%@:%@", ra.relayUser, ra.relayHost, ra.relayPort]
@@ -576,7 +591,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                             on:ra.keepAwake action:@selector(keepAwakeRemoteToggled:)
                          width:kSliderRowWidth]];
 
-    // Connect — auto-discovered peers; ● live / ○ offline, with per-peer actions.
     [m addItem:[NSMenuItem sectionHeaderWithTitle:@"Connect to a Mac"]];
     NSArray<NSDictionary *> *peers = ra.peers;
     if (peers.count == 0) {
@@ -586,10 +600,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         BOOL isSelf = [peer[@"self"] boolValue];
         NSString *name = isSelf ? [NSString stringWithFormat:@"%@ (this Mac)", peer[@"name"]]
                                 : peer[@"name"];
-        // filled dot = online, hollow = offline (reads even when dimmed, no color needed)
+
         [self addInfoRow:m title:name
                    image:ddSymbol([peer[@"online"] boolValue] ? @"circle.fill" : @"circle")];
-        if (isSelf) continue;   // it's you — shown for status, nothing to connect to
+        if (isSelf) continue;
         NSMenuItem *ss = [[NSMenuItem alloc] initWithTitle:@"Screen Share"
             action:@selector(connectScreenShare:) keyEquivalent:@""];
         ss.target = self; ss.image = ddSymbol(@"display"); ss.representedObject = peer;
@@ -608,13 +622,11 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     refresh.target = self; refresh.image = ddSymbol(@"arrow.clockwise");
     [m addItem:refresh];
 
-    [self sizeSliderRowsInMenu:m];   // stretch the field row to the submenu's natural width
+    [self sizeSliderRowsInMenu:m];
     [menu addItem:[self toggleRow:@"Remote Access" icon:@"network" on:ra.isEnabled
                            action:@selector(remoteSwitchToggled:) submenu:m]];
 }
 
-// Inline "<label>  [switch]" row — an NSSwitch like a Settings toggle. Shared by
-// Keep Awake and Remote Access so on/off reads the same everywhere.
 - (NSMenuItem *)switchRow:(NSString *)label icon:(NSString *)symbol
                        on:(BOOL)on action:(SEL)action width:(CGFloat)width {
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 28)];
@@ -642,8 +654,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [sw.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
     ] mutableCopy];
 
-    // Label is optional — when blank (e.g. inside a self-titling submenu) the row
-    // is just the icon and the toggle.
     if (label.length) {
         NSTextField *name = [NSTextField labelWithString:label];
         name.font = [NSFont menuFontOfSize:13];
@@ -671,12 +681,9 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     if (sw.state == NSControlStateValueOn) { [ra enable]; } else { [ra disable]; }
 }
 
-// Inline editable row (label + text field) — edited in place in the menu, like
-// the sliders, instead of a popup. Commits on Return / when focus leaves.
 - (NSMenuItem *)relayFieldRow:(NSString *)value
                   placeholder:(NSString *)placeholder action:(SEL)action {
-    // Full-width inline field — no label (the section header already says "Relay").
-    // Tagged so the submenu sizing pass stretches it to the menu's natural width.
+
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 30)];
 
     NSTextField *field = [[NSTextField alloc] init];
@@ -688,7 +695,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     field.editable = YES;
     field.selectable = YES;
     field.target = self;
-    field.action = action;     // Return / end-editing
+    field.action = action;
     field.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:field];
 
@@ -709,7 +716,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
-// Parse a single "[user@]host[:port]" endpoint into the three settings.
 - (void)relayEndpointFieldChanged:(NSTextField *)f {
     NSString *s = [self trimmed:f.stringValue];
     RemoteAccess *ra = [RemoteAccess shared];
@@ -772,8 +778,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         [menu addItem:[self actionItem:@"Stop Forced HiDPI"
                                 action:@selector(stopForcedHiDPI:) displayID:display.displayID
                                 symbol:@"arrow.uturn.backward"]];
-        // Brightness & Warmth still drive the physical panel while it's mirrored —
-        // keep them; only the resolution/disable items stay hidden during a force.
+
         [self addBrightnessWarmthToMenu:menu display:display];
         return;
     }
@@ -969,7 +974,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     b.tag = tag;
     b.toolTip = tooltip;
     b.translatesAutoresizingMaskIntoConstraints = NO;
-    ddSetToggle(b, on);   // sets state + the correct tinted image
+    ddSetToggle(b, on);
     return b;
 }
 
@@ -1121,7 +1126,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
 - (void)toggleAutoWarmth:(NSButton *)sender {
     BOOL on = (sender.state == NSControlStateValueOn);
-    [ColorTemperature shared].autoEnabled = on;   // applies the night schedule (or clears it)
+    [ColorTemperature shared].autoEnabled = on;
     ddSetToggle(sender, on);
 }
 
@@ -1155,8 +1160,8 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
 - (void)togglePiPApp:(NSButton *)sender {
     WindowPiP *pip = [WindowPiP shared];
-    if (![pip hasAccessibility]) {
-        [pip requestAccessibility];
+    if (!DDAXTrusted()) {
+        DDAXRequestTrust();
         ddSetToggle(sender, NO);
         return;
     }
@@ -1175,7 +1180,7 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     if (menu == self.mainMenu) {
-        [[RemoteAccess shared] refreshPeers];   // async; rebuilds only if the list changed
+        [[RemoteAccess shared] refreshPeers];
         [self populateMainMenu:menu];
         return;
     }
@@ -1235,14 +1240,10 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     return item;
 }
 
-// ---- macOS font smoothing (AppleFontSmoothing, current-host global domain) ----
-// Bumps grayscale antialiasing strength so text isn't thin/fuzzy on external,
-// non-Retina, or scaled displays. Read by apps at launch → needs a re-login.
-
 - (NSInteger)currentFontSmoothing {
     CFPropertyListRef v = CFPreferencesCopyValue(CFSTR("AppleFontSmoothing"),
         kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
-    NSInteger n = -1;  // -1 = key absent (system default)
+    NSInteger n = -1;
     if (v) {
         if (CFGetTypeID(v) == CFNumberGetTypeID())
             CFNumberGetValue((CFNumberRef)v, kCFNumberNSIntegerType, &n);
@@ -1260,10 +1261,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
 }
 
-// Text smoothing is an On/Off setting on modern macOS, not a gradient: pixel-diffing
-// rendered text shows AppleFontSmoothing 1/2/3 are byte-identical — only 0 (off) vs
-// on actually changes glyphs. So this is a single toggle. On writes the standard
-// level (2); Off writes 0. (Apps read it at launch, so it applies after a re-login.)
 - (void)fontSmoothingToggled:(NSSwitch *)sw {
     [self applyFontSmoothing:(sw.state == NSControlStateValueOn) ? 2 : 0];
 }
@@ -1340,8 +1337,6 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
     [self addInfoRow:menu title:title image:nil];
 }
 
-// A disabled (non-clickable) info row with an optional icon — giving it an icon
-// fills the image gutter so the text doesn't read as indented next to icon'd rows.
 - (void)addInfoRow:(NSMenu *)menu title:(NSString *)title image:(NSImage *)image {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
     item.enabled = NO;

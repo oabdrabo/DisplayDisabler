@@ -7,7 +7,7 @@
 
 Disable & enable screens · Force HiDPI · brightness with EDR boost · color warmth (with auto-night) · window tiling/snapping · transparency, blur, keep-on-top & picture-in-picture · keep-awake · remote access.
 
-[![Release](https://img.shields.io/badge/release-v2.7.2-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.8.0-2ea44f?style=flat-square)](https://github.com/oabdrabo/DisplayDeck/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14%2B-000?style=flat-square&logo=apple&logoColor=white)](#-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-555?style=flat-square)](#-requirements)
@@ -36,6 +36,7 @@ Disable & enable screens · Force HiDPI · brightness with EDR boost · color wa
 | ☀️ **Brightness + boost** | Built-in panel via `DisplayServices`, externals via DDC/CI, an inline **auto-brightness** toggle, and an **EDR boost above 100%** clamped to the display's real, learned headroom (mild on a built-in, big on a true XDR/HDR panel) — colors preserved, auto-suspends in Mission Control. |
 | 🌡️ **Warmth + auto-night** | Per-display color-temperature slider (f.lux / Night-Shift style) via gamma ramps — 6500 K neutral → ~3400 K warm, persisted, restores native ColorSync at 0%. An **automatic night schedule** (moon toggle) eases warmth on at dusk and off by morning, hands-free. |
 | 🧩 **Window snapping** | Tile the focused window to **halves, quarters, thirds / two-thirds, maximize, center**, or **restore** — via **global `⌃⌥` keyboard shortcuts**, **dragging to a screen edge/corner** (with a live preview), or the **Window** menu. Uses the Accessibility API; works on a stock machine. |
+| 🔳 **Window arrangement** | Tile **every** window on the screen at once: a **2×2 grid**, or one window **centered *over* the grid** (the others peek out around its edges). Toggle layouts, **promote** the focused window to the center, or **rotate** which window is centered — on global `⌃⌥⇧` shortcuts or the **Window → Arrange Windows** menu. Same Accessibility permission as snapping. |
 | 🪟 **Window transparency** | Set per-app or all-window opacity for **any** app, via a self-contained scripting addition injected into Dock (no external tools). Optional **frosted-glass blur**, per-app **Keep on top**, and **Picture-in-Picture** (shrink a window into a still-usable floating corner). |
 | ☕ **Keep awake** | An IOKit caffeine assertion so the Mac and its display don't sleep — indefinitely (toggle) or for a set duration (15 min → 5 h). Replaces KeepingYouAwake. |
 | 🌐 **Remote access** | Reach this Mac — and your **other Macs** — from anywhere, with **nothing to install**. An auto-reconnecting **reverse-SSH** tunnel through a relay host *you* control forwards **SSH**, **Screen Sharing**, and **file transfer (SFTP)**; no Tailscale/Headscale or third-party agent. Doubles as a **client**: peers on the same relay are **auto-discovered with live online status**, so you can Screen Share, SSH, or transfer files to them from the menu. Optionally **keeps the Mac awake** while on so it stays reachable, and surfaces **why** a connection failed. |
@@ -67,6 +68,10 @@ The menu — a **Keep Awake** row with an inline toggle, per-display **Brightnes
 **Window snapping** — tile the focused window to halves, quarters, thirds, maximize or center, each with a layout glyph and a global `⌃⌥` shortcut:
 
 <p align="center"><img src="assets/screenshots/windowsnap.png" width="430" alt="Window snap menu with layout glyphs" /></p>
+
+**Window arrangement** — tile every window into a 2×2 grid, or float one centered over the grid (the rest peek out around it); cycle layouts, promote, or rotate the centered window with `⌃⌥⇧` shortcuts:
+
+<p align="center"><img src="assets/screenshots/arrange.png" width="430" alt="Arrange Windows submenu — Grid 2×2, Centered over Grid, Cycle Layout, Promote to Main, Center Next/Previous, Restore" /></p>
 
 Submenus — Keep-Awake durations, the curated **Resolution** picker (★ = panel-native), the **Force HiDPI** "More Space" tier, and the grouped **Settings**:
 

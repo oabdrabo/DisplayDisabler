@@ -19,17 +19,13 @@ SOURCES    = src/main.m \
              src/display/ColorTemperature.m \
              src/power/Caffeine.m \
              src/transparency/WindowTransparency.m \
+             src/window/AXWindow.m \
              src/window/WindowPiP.m src/window/WindowManager.m \
              src/remote/RemoteAccess.m
 OBJECTS    = $(SOURCES:.m=.o)
 DEPS       = $(SOURCES:.m=.d)
 EXECUTABLE = $(APP_NAME)
 
-# Stable code-signing identity. A local self-signed cert keeps the app's code
-# identity (and therefore TCC grants like Accessibility) constant across rebuilds —
-# ad-hoc signing changes the cdhash every build, which silently invalidates the
-# grant. Falls back to ad-hoc if the cert isn't present (CI / other machines).
-# Recreate with: make signing-identity
 SIGN_KEYCHAIN    = $(HOME)/Library/Keychains/displaydeck-signing.keychain-db
 SIGN_KEYCHAIN_PW = displaydeck
 SIGN_ID := $(shell security find-identity -p codesigning "$(SIGN_KEYCHAIN)" 2>/dev/null | grep -o "DisplayDeck Self-Signed" | head -1)
@@ -100,8 +96,6 @@ sign: bundle
 	@codesign --force --sign "$(CODESIGN_ID)" $(CODESIGN_KC) "$(BUNDLE)"
 	@echo "Signed $(BUNDLE) ($(SIGN_LABEL))"
 
-# One-time: create the local self-signed code-signing identity. Survives rebuilds,
-# so the Accessibility (and other TCC) grants stick instead of re-prompting.
 signing-identity:
 	@OSSL=$$(command -v /opt/homebrew/bin/openssl || command -v openssl); \
 	KC="$(SIGN_KEYCHAIN)"; PW="$(SIGN_KEYCHAIN_PW)"; \

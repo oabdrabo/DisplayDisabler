@@ -1,5 +1,3 @@
-// ddcrop in.png x y w h out.png — crop a pixel region (top-left origin). Used to pull
-// focused sections (Brightness/Warmth, Transparency) out of a full menu capture.
 #import <Cocoa/Cocoa.h>
 int main(int c, char **v) { @autoreleasepool {
   if (c < 7) { fprintf(stderr, "usage: ddcrop in.png x y w h out.png\n"); return 2; }

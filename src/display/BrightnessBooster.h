@@ -7,7 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-- (BOOL)available;
 - (float)maxBoostForDisplay:(CGDirectDisplayID)displayID;
 - (float)boostForDisplay:(CGDirectDisplayID)displayID;
 - (void)setBoost:(float)factor forDisplay:(CGDirectDisplayID)displayID;

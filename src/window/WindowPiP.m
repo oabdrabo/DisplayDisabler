@@ -1,5 +1,6 @@
 #import "WindowPiP.h"
 #import "WindowTransparency.h"
+#import "AXWindow.h"
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 
@@ -23,15 +24,6 @@ static const CGFloat kPiPMargin = 16.0;
     self = [super init];
     if (self) _savedFrames = [NSMutableDictionary dictionary];
     return self;
-}
-
-- (BOOL)hasAccessibility {
-    return AXIsProcessTrusted();
-}
-
-- (void)requestAccessibility {
-    NSDictionary *opts = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
 }
 
 - (BOOL)isActiveForApp:(pid_t)pid {
@@ -58,36 +50,9 @@ static AXUIElementRef copyMainWindow(pid_t pid) {
     return win;
 }
 
-static BOOL axGetFrame(AXUIElementRef w, CGRect *out) {
-    CFTypeRef pv = NULL, sv = NULL;
-    CGPoint p; CGSize s;
-    if (AXUIElementCopyAttributeValue(w, kAXPositionAttribute, &pv) != kAXErrorSuccess) return NO;
-    if (AXUIElementCopyAttributeValue(w, kAXSizeAttribute, &sv) != kAXErrorSuccess) {
-        CFRelease(pv);
-        return NO;
-    }
-    BOOL ok = AXValueGetValue(pv, kAXValueCGPointType, &p) &&
-              AXValueGetValue(sv, kAXValueCGSizeType, &s);
-    CFRelease(pv); CFRelease(sv);
-    if (ok) *out = CGRectMake(p.x, p.y, s.width, s.height);
-    return ok;
-}
-
-static void axSetPos(AXUIElementRef w, CGPoint p) {
-    AXValueRef v = AXValueCreate(kAXValueCGPointType, &p);
-    AXUIElementSetAttributeValue(w, kAXPositionAttribute, v);
-    CFRelease(v);
-}
-
-static void axSetSize(AXUIElementRef w, CGSize s) {
-    AXValueRef v = AXValueCreate(kAXValueCGSizeType, &s);
-    AXUIElementSetAttributeValue(w, kAXSizeAttribute, v);
-    CFRelease(v);
-}
-
 - (BOOL)toggleForApp:(pid_t)pid {
-    if (![self hasAccessibility]) {
-        [self requestAccessibility];
+    if (!DDAXTrusted()) {
+        DDAXRequestTrust();
         return NO;
     }
     AXUIElementRef w = copyMainWindow(pid);
@@ -96,15 +61,13 @@ static void axSetSize(AXUIElementRef w, CGSize s) {
     BOOL nowActive;
     if ([self isActiveForApp:pid]) {
         CGRect f = self.savedFrames[@(pid)].rectValue;
-        axSetPos(w, f.origin);
-        axSetSize(w, f.size);
-        axSetPos(w, f.origin);
+        DDAXSetFrame(w, f);
         [self.savedFrames removeObjectForKey:@(pid)];
         [[WindowTransparency shared] setPinned:NO forApp:pid error:NULL];
         nowActive = NO;
     } else {
         CGRect cur;
-        if (!axGetFrame(w, &cur) || cur.size.width < 1) {
+        if (!DDAXCopyFrame(w, &cur) || cur.size.width < 1) {
             CFRelease(w);
             return NO;
         }
@@ -114,8 +77,7 @@ static void axSetSize(AXUIElementRef w, CGSize s) {
         CGPoint origin = CGPointMake(
             screen.origin.x + screen.size.width  - size.width  - kPiPMargin,
             screen.origin.y + screen.size.height - size.height - kPiPMargin);
-        axSetSize(w, size);
-        axSetPos(w, origin);
+        DDAXSetFrame(w, (CGRect){ origin, size });
         [[WindowTransparency shared] setPinned:YES forApp:pid error:NULL];
         nowActive = YES;
     }

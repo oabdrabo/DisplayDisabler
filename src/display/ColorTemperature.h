@@ -7,7 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-// Auto-warm at night (Night Shift style, schedule-based). On by default.
 @property (nonatomic) BOOL autoEnabled;
 
 - (float)warmthForDisplay:(CGDirectDisplayID)displayID;

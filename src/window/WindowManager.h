@@ -21,24 +21,26 @@ typedef NS_ENUM(NSInteger, DDSnap) {
     DDSnapRestore,
 };
 
-// Tiling/window management for the focused window, via the Accessibility API
-// (the same permission Picture-in-Picture uses). Three ways to trigger a snap:
-// the menu, global keyboard shortcuts (⌃⌥ + key), and dragging a window to a
-// screen edge/corner (with a live preview).
+typedef NS_ENUM(NSInteger, DDArrange) {
+    DDArrangeGrid = 0,
+    DDArrangeCentered,
+    DDArrangeCycle,
+    DDArrangePromote,
+    DDArrangeRotateNext,
+    DDArrangeRotatePrev,
+    DDArrangeRestore,
+};
+
 @interface WindowManager : NSObject
 
 + (instancetype)shared;
 
-- (BOOL)hasAccessibility;
-- (void)requestAccessibility;
-
-// Snap the currently-focused window to a layout.
 - (void)snap:(DDSnap)layout;
 
-// Global ⌃⌥ keyboard shortcuts (registered system-wide via Carbon hot keys).
+- (void)arrange:(DDArrange)command;
+
 - (void)setHotkeysEnabled:(BOOL)enabled;
 
-// Snap-on-drag: drag a window to a screen edge/corner to tile it.
 - (void)setDragSnapEnabled:(BOOL)enabled;
 
 @end

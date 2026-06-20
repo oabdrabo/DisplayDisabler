@@ -1,22 +1,21 @@
 #import "ColorTemperature.h"
+#import "DDUtil.h"
 #include <math.h>
 
 static NSString *const kWarmthKey = @"DDWarmth";
 static NSString *const kAutoKey   = @"DDWarmthAuto";
 static const double kNeutralKelvin = 6500.0;
 static const double kWarmestKelvin = 3400.0;
-static const float  kNightDefault = 0.6f;   // night peak when auto is on and you've set none
+static const float  kNightDefault = 0.6f;
 enum { kRampSize = 256 };
 
-// Night intensity 0 (neutral/day) … 1 (full warm). Time-based (no location):
-// full warmth 20:00–06:00, with 1-hour linear transitions at dusk and dawn.
 static float nightRamp(void) {
     NSDateComponents *c = [[NSCalendar currentCalendar]
         components:NSCalendarUnitHour | NSCalendarUnitMinute fromDate:[NSDate date]];
     double h = c.hour + c.minute / 60.0;
     if (h >= 20.0 || h < 6.0)       return 1.0f;
-    if (h >= 18.0 && h < 20.0)      return (float)((h - 18.0) / 2.0);   // dusk ramp up
-    if (h >= 6.0  && h < 8.0)       return (float)(1.0 - (h - 6.0) / 2.0); // dawn ramp down
+    if (h >= 18.0 && h < 20.0)      return (float)((h - 18.0) / 2.0);
+    if (h >= 6.0  && h < 8.0)       return (float)(1.0 - (h - 6.0) / 2.0);
     return 0.0f;
 }
 
@@ -43,18 +42,12 @@ static void ddColorReconfig(CGDirectDisplayID, CGDisplayChangeSummaryFlags, void
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _warmths = [NSMutableDictionary dictionary];
+        _warmths = DDLoadNumberMap(kWarmthKey);
         _lastRamp = -1.0f;
-        NSDictionary *saved = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kWarmthKey];
-        for (NSString *key in saved) {
-            if ([saved[key] isKindOfClass:[NSNumber class]]) {
-                _warmths[@((CGDirectDisplayID)key.longLongValue)] = saved[key];
-            }
-        }
-        // Re-evaluate the night schedule (and re-assert warmth) each minute.
+
         _timer = [NSTimer scheduledTimerWithTimeInterval:60 target:self
                     selector:@selector(tick) userInfo:nil repeats:YES];
-        // Gamma is wiped by display reconfig / sleep-wake — re-apply when that happens.
+
         CGDisplayRegisterReconfigurationCallback(ddColorReconfig, (__bridge void *)self);
     }
     return self;
@@ -62,7 +55,7 @@ static void ddColorReconfig(CGDirectDisplayID, CGDisplayChangeSummaryFlags, void
 
 static void ddColorReconfig(CGDirectDisplayID d, CGDisplayChangeSummaryFlags flags, void *ctx) {
     (void)d;
-    if (flags & kCGDisplayBeginConfigurationFlag) return;   // wait for it to settle
+    if (flags & kCGDisplayBeginConfigurationFlag) return;
     ColorTemperature *self = (__bridge ColorTemperature *)ctx;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [self reassert]; });
@@ -70,17 +63,17 @@ static void ddColorReconfig(CGDirectDisplayID d, CGDisplayChangeSummaryFlags fla
 
 - (void)tick {
     float r = self.autoEnabled ? nightRamp() : -1.0f;
-    if (fabsf(r - self.lastRamp) >= 0.005f) {   // schedule moved → re-apply (handles fade down too)
+    if (fabsf(r - self.lastRamp) >= 0.005f) {
         self.lastRamp = r;
         [self reapply];
     } else {
-        [self reassert];   // unchanged → just re-assert, self-healing any external gamma reset
+        [self reassert];
     }
 }
 
 - (BOOL)autoEnabled {
     NSNumber *v = [[NSUserDefaults standardUserDefaults] objectForKey:kAutoKey];
-    return v ? v.boolValue : YES;   // default ON — warms automatically at night
+    return v ? v.boolValue : YES;
 }
 
 - (void)setAutoEnabled:(BOOL)autoEnabled {
@@ -115,25 +108,19 @@ static void temperatureGains(double kelvin, double *r, double *g, double *b) {
     CGSetDisplayTransferByTable(displayID, kRampSize, r, g, b);
 }
 
-// What should be on screen now. Auto OFF → exactly the slider (constant, fully live).
-// Auto ON → the slider is the *night peak*, scaled by the schedule (full at night, fading
-// to neutral by day) — so the slider always changes the result, no dead zone.
 - (float)effectiveWarmthForDisplay:(CGDirectDisplayID)displayID {
     float slider = self.warmths[@(displayID)] ? self.warmths[@(displayID)].floatValue : 0.0f;
     if (!self.autoEnabled) return slider;
-    float peak = slider > 0.001f ? slider : kNightDefault;   // set nothing → sensible default
+    float peak = slider > 0.001f ? slider : kNightDefault;
     return peak * nightRamp();
 }
 
-// Slider value = your manual setting (auto's night warmth rides on top, shown by the moon).
 - (float)warmthForDisplay:(CGDirectDisplayID)displayID {
     return self.warmths[@(displayID)] ? self.warmths[@(displayID)].floatValue : 0.0f;
 }
 
 - (void)persist {
-    NSMutableDictionary<NSString *, NSNumber *> *out = [NSMutableDictionary dictionary];
-    for (NSNumber *key in self.warmths) out[key.stringValue] = self.warmths[key];
-    [[NSUserDefaults standardUserDefaults] setObject:out forKey:kWarmthKey];
+    DDSaveNumberMap(self.warmths, kWarmthKey);
 }
 
 - (void)setWarmth:(float)warmth forDisplay:(CGDirectDisplayID)displayID {
@@ -144,30 +131,17 @@ static void temperatureGains(double kelvin, double *r, double *g, double *b) {
     [self reapply];
 }
 
-static NSArray<NSNumber *> *activeDisplays(void) {
-    CGDirectDisplayID ids[16];
-    uint32_t n = 0;
-    if (CGGetActiveDisplayList(16, ids, &n) != kCGErrorSuccess) return @[];
-    NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:n];
-    for (uint32_t i = 0; i < n; i++) [out addObject:@(ids[i])];
-    return out;
-}
-
-// Full re-apply: clear to the calibrated profile first (so a *reduced* warmth is
-// honored), then lay the effective warmth back on each active display.
 - (void)reapply {
     CGDisplayRestoreColorSyncSettings();
     self.lastRamp = self.autoEnabled ? nightRamp() : -1.0f;
-    for (NSNumber *d in activeDisplays()) {
+    for (NSNumber *d in DDQueryDisplayList(CGGetActiveDisplayList)) {
         float w = [self effectiveWarmthForDisplay:d.unsignedIntValue];
         if (w > 0.001f) [self setRampForDisplay:d.unsignedIntValue warmth:w];
     }
 }
 
-// Re-assert the current warmth without the neutral reset — idempotent and flicker-free,
-// so it can run every tick / after a reconfig to recover gamma that got wiped.
 - (void)reassert {
-    for (NSNumber *d in activeDisplays()) {
+    for (NSNumber *d in DDQueryDisplayList(CGGetActiveDisplayList)) {
         float w = [self effectiveWarmthForDisplay:d.unsignedIntValue];
         if (w > 0.001f) [self setRampForDisplay:d.unsignedIntValue warmth:w];
     }

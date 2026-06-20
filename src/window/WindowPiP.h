@@ -6,8 +6,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-- (BOOL)hasAccessibility;
-- (void)requestAccessibility;
 - (BOOL)isActiveForApp:(pid_t)pid;
 - (BOOL)toggleForApp:(pid_t)pid;
 - (void)restoreAll;

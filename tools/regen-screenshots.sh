@@ -1,8 +1,4 @@
 #!/bin/bash
-# Regenerate all menu screenshots for the README + website.
-# NOTE: this drives the live status-bar menu (synthesises clicks), so it takes over
-# the cursor/menu for ~20s — run it when you're not mid-task. Needs Accessibility +
-# Screen Recording permission for the terminal running it.
 set -e
 cd "$(dirname "$0")/.."
 DD="com.local.DisplayDeck"
@@ -19,12 +15,12 @@ relaunch
 "$TMP/ddshot" "$TMP/menu.png"
 "$TMP/ddshot" "$TMP/forcehidpi.png" "Force HiDPI"
 "$TMP/ddshot" "$TMP/windowsnap.png" "Snap Window"
+"$TMP/ddshot" "$TMP/arrange.png"    "Arrange Windows"
 "$TMP/ddshot" "$TMP/keepawake.png"  "Keep Awake"
 "$TMP/ddshot" "$TMP/resolution.png" "Resolution"
 "$TMP/ddshot" "$TMP/settings.png"   "Settings"
 
 echo "cropping Brightness/Warmth + Transparency sections from the menu…"
-# coordinates are for the standard menu layout (502px-wide capture); tweak if your menu differs
 "$TMP/ddcrop" "$TMP/menu.png" 0 64  502 150 "$TMP/brightness-warmth.png"
 "$TMP/ddcrop" "$TMP/menu.png" 0 566 508 320 "$TMP/transparency.png"
 
@@ -38,7 +34,7 @@ relaunch
 
 echo "installing into assets/ and docs/assets/…"
 for d in assets/screenshots docs/assets/screenshots; do
-  cp "$TMP"/{menu,forcehidpi,windowsnap,keepawake,resolution,settings,remote,brightness-warmth,transparency}.png "$d/"
+  cp "$TMP"/{menu,forcehidpi,windowsnap,arrange,keepawake,resolution,settings,remote,brightness-warmth,transparency}.png "$d/"
 done
 rm -rf "$TMP"
 echo "done — review with: git diff --stat assets docs/assets"

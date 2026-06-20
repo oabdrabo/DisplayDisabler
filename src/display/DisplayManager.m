@@ -18,10 +18,7 @@ static const double kDDAspectTolerance = 0.005;
 
 static const double kDDHiDPIScales[] = {0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.3125, 1.35, 1.5, 1.75, 2.0};
 static const size_t kDDHiDPIScaleCount = sizeof(kDDHiDPIScales) / sizeof(*kDDHiDPIScales);
-// A forced-HiDPI mode renders at 2x the logical ("looks-like") size, so cap the
-// rendered framebuffer absolutely rather than by a flat panel-relative scale:
-// small / 2K panels get more "More Space" options while 4K/5K panels stay
-// protected. The ceiling auto-tunes to the GPU (see +maxHiDPIFramebuffer).
+
 static const size_t kDDMinLogicalW = 800;
 
 typedef struct { uint32_t width; uint32_t height; } SLVirtualDisplaySize;
@@ -78,21 +75,6 @@ static CGSize ddCurrentPixelSize(CGDirectDisplayID displayID) {
         CGDisplayModeRelease(cur);
     }
     return r;
-}
-
-typedef CGError (*DDDisplayListFn)(uint32_t, CGDirectDisplayID *, uint32_t *);
-
-static NSArray<NSNumber *> *ddQueryDisplayList(DDDisplayListFn fn) {
-    uint32_t count = 0;
-    if (fn(0, NULL, &count) != kCGErrorSuccess || count == 0) return @[];
-    CGDirectDisplayID *buf = calloc(count, sizeof *buf);
-    if (!buf) return @[];
-    CGError err = fn(count, buf, &count);
-    if (err != kCGErrorSuccess) { free(buf); return @[]; }
-    NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:count];
-    for (uint32_t i = 0; i < count; i++) [out addObject:@(buf[i])];
-    free(buf);
-    return out;
 }
 
 @implementation DDDisplayInfo
@@ -203,14 +185,33 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-        uint64_t budget = dev ? dev.recommendedMaxWorkingSetSize : 0;   // unified-memory budget
+        uint64_t budget = dev ? dev.recommendedMaxWorkingSetSize : 0;
         const uint64_t GB = 1024ULL * 1024 * 1024;
-        if      (budget >= 16 * GB) cap = CGSizeMake(10240, 5760);  // Max/Ultra-class
-        else if (budget >=  8 * GB) cap = CGSizeMake(7680, 4800);   // Pro / 16GB+ — allows 3840×2400 looks-like
-        else if (budget >=  4 * GB) cap = CGSizeMake(6400, 4000);   // base M, 8GB — allows 3200×2000
-        else                        cap = CGSizeMake(5120, 2880);   // conservative fallback
+        if      (budget >= 16 * GB) cap = CGSizeMake(10240, 5760);
+        else if (budget >=  8 * GB) cap = CGSizeMake(7680, 4800);
+        else if (budget >=  4 * GB) cap = CGSizeMake(6400, 4000);
+        else                        cap = CGSizeMake(5120, 2880);
     });
     return cap;
+}
+
++ (NSArray<NSValue *> *)hidpiLogicalSizesForPanel:(CGSize)panelPixels {
+    if (panelPixels.width <= 0 || panelPixels.height <= 0) return @[];
+    CGSize fbCap = [self maxHiDPIFramebuffer];
+    NSMutableArray<NSValue *> *out = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (size_t i = 0; i < kDDHiDPIScaleCount; i++) {
+        size_t lw = (size_t)round(panelPixels.width  * kDDHiDPIScales[i] / 2.0) * 2;
+        size_t lh = (size_t)round(panelPixels.height * kDDHiDPIScales[i] / 2.0) * 2;
+        if (lw == 0 || lh == 0) continue;
+        if (lw < kDDMinLogicalW) continue;
+        if (lw * 2 > (size_t)fbCap.width || lh * 2 > (size_t)fbCap.height) continue;
+        NSString *key = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
+        if ([seen containsObject:key]) continue;
+        [seen addObject:key];
+        [out addObject:[NSValue valueWithSize:NSMakeSize(lw, lh)]];
+    }
+    return out;
 }
 
 - (BOOL)performDisplayConfig:(DisplayConfigBlock)block error:(NSError **)error {
@@ -307,9 +308,9 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 }
 
 - (NSArray<DDDisplayInfo *> *)allDisplays {
-    NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
+    NSArray<NSNumber *> *online = DDQueryDisplayList(CGGetOnlineDisplayList);
     NSSet<NSNumber *> *onlineSet = [NSSet setWithArray:online];
-    NSSet<NSNumber *> *activeSet = [NSSet setWithArray:ddQueryDisplayList(CGGetActiveDisplayList)];
+    NSSet<NSNumber *> *activeSet = [NSSet setWithArray:DDQueryDisplayList(CGGetActiveDisplayList)];
 
     NSMutableArray<DDDisplayInfo *> *result = [NSMutableArray array];
 
@@ -433,12 +434,12 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 - (BOOL)isRealExternal:(CGDirectDisplayID)did {
     if (CGDisplayIsBuiltin(did)) return NO;
     if ([self isVirtualDisplayID:did]) return NO;
-    if (CGDisplayVendorNumber(did) == 0) return NO;   // phantom / generic "Display" entry, no EDID
+    if (CGDisplayVendorNumber(did) == 0) return NO;
     return YES;
 }
 
 - (BOOL)hasExternalDisplay {
-    for (NSNumber *didNum in ddQueryDisplayList(CGGetOnlineDisplayList)) {
+    for (NSNumber *didNum in DDQueryDisplayList(CGGetOnlineDisplayList)) {
         if ([self isRealExternal:didNum.unsignedIntValue]) return YES;
     }
     return NO;
@@ -446,14 +447,14 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 
 - (BOOL)recoverStrandedBuiltIn {
     DDDisplayInfo *builtIn = [self builtInDisplay];
-    if (!builtIn || builtIn.isActive) return NO;          // built-in present & on → fine
-    for (NSNumber *didNum in ddQueryDisplayList(CGGetActiveDisplayList)) {
+    if (!builtIn || builtIn.isActive) return NO;
+    for (NSNumber *didNum in DDQueryDisplayList(CGGetActiveDisplayList)) {
         CGDirectDisplayID did = didNum.unsignedIntValue;
         if (![self isRealExternal:did]) continue;
         if (CGDisplayIsAsleep(did)) continue;
-        return NO;                                         // a real external is actually showing
+        return NO;
     }
-    NSError *error = nil;                                  // built-in off and nothing real is on → rescue
+    NSError *error = nil;
     BOOL ok = [self enableDisplay:builtIn.displayID error:&error];
     if (ok) NSLog(@"DisplayDeck: failsafe re-enabled the built-in display (no real external present)");
     else NSLog(@"DisplayDeck: failsafe re-enable failed: %@", error);
@@ -585,7 +586,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 }
 
 - (BOOL)isDisplayIDOnline:(CGDirectDisplayID)vdID {
-    return [ddQueryDisplayList(CGGetOnlineDisplayList) containsObject:@(vdID)];
+    return [DDQueryDisplayList(CGGetOnlineDisplayList) containsObject:@(vdID)];
 }
 
 - (BOOL)waitForVirtualDisplayOnline:(CGDirectDisplayID)vdID timeout:(NSTimeInterval)timeout {
@@ -743,7 +744,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     CGRect preForceBounds = CGDisplayBounds(displayID);
 
     NSMutableDictionary<NSNumber *, NSValue *> *topology = [NSMutableDictionary dictionary];
-    for (NSNumber *didNum in ddQueryDisplayList(CGGetActiveDisplayList)) {
+    for (NSNumber *didNum in DDQueryDisplayList(CGGetActiveDisplayList)) {
         CGDirectDisplayID did = didNum.unsignedIntValue;
         if ([self isVirtualDisplayID:did]) continue;
         CGRect b = CGDisplayBounds(did);
@@ -850,7 +851,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 
     [self matchGammaFromDisplay:displayID toDisplay:virtualID];
 
-    NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
+    NSArray<NSNumber *> *online = DDQueryDisplayList(CGGetOnlineDisplayList);
     NSError *topoErr = nil;
     BOOL topoOk = [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         return [self layoutVirtual:virtualID atOrigin:preForceBounds.origin
@@ -941,13 +942,9 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
         CGDisplayModeRelease(curMode);
     }
 
-    for (size_t i = 0; i < kDDHiDPIScaleCount; i++) {
-        size_t lw = (size_t)round(physical.width  * kDDHiDPIScales[i] / 2.0) * 2;
-        size_t lh = (size_t)round(physical.height * kDDHiDPIScales[i] / 2.0) * 2;
-        if (lw == 0 || lh == 0) continue;
-        if (lw < kDDMinLogicalW) continue;                              // skip tiny
-        CGSize fbCap = [DisplayManager maxHiDPIFramebuffer];            // auto-tuned to the GPU
-        if (lw * 2 > (size_t)fbCap.width || lh * 2 > (size_t)fbCap.height) continue;
+    for (NSValue *sizeVal in [DisplayManager hidpiLogicalSizesForPanel:physical]) {
+        NSSize sz = sizeVal.sizeValue;
+        size_t lw = (size_t)sz.width, lh = (size_t)sz.height;
         NSString *logKey = [NSString stringWithFormat:@"%zu_%zu", lw, lh];
         if ([seenLogical containsObject:logKey]) continue;
         if ([redundantLogical containsObject:logKey]) continue;
@@ -1076,10 +1073,6 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 
     [self clearForceState];
 
-    // Destroy the virtual display — not just unmirror it. Leaving it alive parks a
-    // full-size (2× backing, e.g. 6400×4000) phantom screen in the arrangement,
-    // which chokes the WindowServer and can strand the cursor off-screen. The next
-    // force recreates it via ensureSharedVirtualDisplay…
     [self destroySharedVirtualDisplay];
 
     NSLog(@"DisplayDeck: Stopped forced HiDPI for display 0x%X", displayID);
@@ -1106,20 +1099,12 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     [self destroySharedVirtualDisplay];
 }
 
-// Tear down the shared virtual display and drop our reference. Dropping the ivar
-// before -destroy means a re-entrant call hits the guard below and no-ops, so we
-// never double-free.
 - (void)destroySharedVirtualDisplay {
     if (!self.sharedVirtualDisplay) return;
     SLVirtualDisplay *vd = self.sharedVirtualDisplay;
     self.sharedVirtualDisplay = nil;
     [vd destroy];
 
-    // -destroy only *marks* the virtual display for teardown: the WindowServer
-    // doesn't drop it from the online display list until the next reconfiguration
-    // transaction. Run an empty begin/complete cycle to flush the removal now —
-    // otherwise the orphaned 2×-backing screen lingers (choking the WindowServer
-    // and stranding the cursor) until the process exits.
     [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
         (void)config;
         return kCGErrorSuccess;
@@ -1184,7 +1169,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
         }
 
         if (!topoOK) {
-            NSArray<NSNumber *> *online = ddQueryDisplayList(CGGetOnlineDisplayList);
+            NSArray<NSNumber *> *online = DDQueryDisplayList(CGGetOnlineDisplayList);
             [self performDisplayConfig:^CGError(CGDisplayConfigRef config) {
                 return [self layoutVirtual:virtualID atOrigin:physOrigin
                                   physical:physical online:online toConfig:config];
@@ -1198,7 +1183,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
 - (void)pruneStaleVirtualDisplays {
     if (self.forcedPhysical == kCGNullDirectDisplay) return;
 
-    NSSet<NSNumber *> *onlineSet = [NSSet setWithArray:ddQueryDisplayList(CGGetOnlineDisplayList)];
+    NSSet<NSNumber *> *onlineSet = [NSSet setWithArray:DDQueryDisplayList(CGGetOnlineDisplayList)];
     if ([onlineSet containsObject:@(self.forcedPhysical)]) return;
 
     CGDirectDisplayID did = self.forcedPhysical;
@@ -1211,7 +1196,7 @@ static NSString *const kDisabledDisplaysKey = @"DDDisabledDisplays";
     } error:NULL];
 
     [self clearForceState];
-    [self destroySharedVirtualDisplay];   // don't leave the orphan VD behind on disconnect
+    [self destroySharedVirtualDisplay];
 }
 
 - (void)startMonitoringWithChangeHandler:(DisplayChangeBlock)handler {

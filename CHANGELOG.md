@@ -2,6 +2,18 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.8.0] — 2026-06-20
+
+### Added
+- **Arrange every window on a screen at once — a new "Arrange Windows" section in the Window menu.** Window snapping has always moved the *focused* window; this tiles *all* of them and flips between layouts with a keystroke:
+  - **Grid 2×2** (`⌃⌥⇧G`) fills the four quadrants (graceful fallback with 2–3 windows).
+  - **Centered over Grid** (`⌃⌥⇧C`) floats one window centered and larger *over* the 2×2, so the others stay visible around its edges.
+  - **Cycle Layout** (`⌃⌥⇧Space`) toggles Grid ↔ Centered. **Promote to Main** (`⌃⌥⇧↩`) centers the focused window; **Center Next / Previous** (`⌃⌥⇧→` / `⌃⌥⇧←`) rotate which window is centered, bringing each fully to the front; **Restore** (`⌃⌥⇧Z`) puts everything back.
+  - Uses the same Accessibility permission as window snapping — no SIP changes, works on a stock machine.
+
+### Changed
+- **Internal cleanup (no behaviour change).** Consolidated duplicated window/display helpers into shared units (Accessibility frame access, HiDPI size tables, the active-display query), trimming ~220 lines.
+
 ## [2.7.2] — 2026-06-19
 
 ### Changed

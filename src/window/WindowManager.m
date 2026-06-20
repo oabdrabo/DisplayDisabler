@@ -1,10 +1,9 @@
 #import "WindowManager.h"
+#import "AXWindow.h"
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
 
-// Threshold (px) from a screen edge for drag-snap to engage, and the band near a
-// corner within which an edge becomes a quarter rather than a half.
 static const CGFloat kEdgeThreshold = 14.0;
 static const CGFloat kCornerBand    = 140.0;
 
@@ -24,31 +23,6 @@ static AXUIElementRef copyFocusedWindow(pid_t *outPid) {
     return (AXUIElementRef)winRef;
 }
 
-static BOOL axGetFrame(AXUIElementRef w, CGRect *out) {
-    CFTypeRef pv = NULL, sv = NULL;
-    CGPoint p; CGSize s;
-    if (AXUIElementCopyAttributeValue(w, kAXPositionAttribute, &pv) != kAXErrorSuccess) return NO;
-    if (AXUIElementCopyAttributeValue(w, kAXSizeAttribute, &sv) != kAXErrorSuccess) {
-        CFRelease(pv); return NO;
-    }
-    BOOL ok = AXValueGetValue(pv, kAXValueCGPointType, &p) &&
-              AXValueGetValue(sv, kAXValueCGSizeType, &s);
-    CFRelease(pv); CFRelease(sv);
-    if (ok) *out = CGRectMake(p.x, p.y, s.width, s.height);
-    return ok;
-}
-
-static void axSetFrame(AXUIElementRef w, CGRect f) {
-    AXValueRef pos = AXValueCreate(kAXValueCGPointType, &f.origin);
-    AXValueRef siz = AXValueCreate(kAXValueCGSizeType, &f.size);
-    // Order matters and a second position set settles windows that clamp size first.
-    AXUIElementSetAttributeValue(w, kAXPositionAttribute, pos);
-    AXUIElementSetAttributeValue(w, kAXSizeAttribute, siz);
-    AXUIElementSetAttributeValue(w, kAXPositionAttribute, pos);
-    CFRelease(pos); CFRelease(siz);
-}
-
-// The NSScreen whose CG bounds contain a global (top-left) point.
 static NSScreen *screenForCGPoint(CGPoint p) {
     for (NSScreen *s in [NSScreen screens]) {
         CGDirectDisplayID did = [s.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
@@ -57,15 +31,14 @@ static NSScreen *screenForCGPoint(CGPoint p) {
     return [NSScreen mainScreen];
 }
 
-// Visible frame (minus menu bar / Dock) in CG global top-left coords.
 static CGRect visibleFrameCG(NSScreen *s) {
     CGDirectDisplayID did = [s.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     CGRect full = CGDisplayBounds(did);
-    NSRect fc = s.frame, vc = s.visibleFrame;       // Cocoa, bottom-left
+    NSRect fc = s.frame, vc = s.visibleFrame;
     CGFloat left   = vc.origin.x - fc.origin.x;
     CGFloat right  = NSMaxX(fc) - NSMaxX(vc);
-    CGFloat top    = NSMaxY(fc) - NSMaxY(vc);        // menu bar (Cocoa top == CG top)
-    CGFloat bottom = vc.origin.y - fc.origin.y;      // Dock at bottom
+    CGFloat top    = NSMaxY(fc) - NSMaxY(vc);
+    CGFloat bottom = vc.origin.y - fc.origin.y;
     return CGRectMake(full.origin.x + left,
                       full.origin.y + top,
                       full.size.width  - left - right,
@@ -92,9 +65,17 @@ static CGRect rectForLayout(DDSnap l, CGRect v, CGRect cur) {
         case DDSnapCenter:        return CGRectMake(x + (w - cur.size.width)/2,
                                                     y + (h - cur.size.height)/2,
                                                     cur.size.width, cur.size.height);
-        case DDSnapRestore:       return cur;  // handled by caller
+        case DDSnapRestore:       return cur;
     }
     return v;
+}
+
+static const CGFloat kArrangeMainFraction = 0.62;
+
+static CGRect centeredRect(CGRect v, CGFloat frac) {
+    CGFloat w = v.size.width * frac, h = v.size.height * frac;
+    return CGRectMake(v.origin.x + (v.size.width  - w) / 2,
+                      v.origin.y + (v.size.height - h) / 2, w, h);
 }
 
 #pragma mark - Coordinate conversion (Cocoa bottom-left <-> CG top-left)
@@ -126,15 +107,30 @@ static const DDHotkey kHotkeys[] = {
 static const size_t kHotkeyCount = sizeof(kHotkeys) / sizeof(*kHotkeys);
 _Static_assert(sizeof(kHotkeys) / sizeof(*kHotkeys) == DD_HOTKEY_COUNT, "hotkey count mismatch");
 
+#define DD_ARRANGE_COUNT 7
+typedef struct { UInt32 key; DDArrange cmd; } DDArrangeKey;
+static const DDArrangeKey kArrangeKeys[] = {
+    { kVK_ANSI_G,     DDArrangeGrid },       { kVK_ANSI_C,    DDArrangeCentered },
+    { kVK_Space,      DDArrangeCycle },      { kVK_Return,    DDArrangePromote },
+    { kVK_RightArrow, DDArrangeRotateNext }, { kVK_LeftArrow, DDArrangeRotatePrev },
+    { kVK_ANSI_Z,     DDArrangeRestore },
+};
+static const size_t kArrangeCount = sizeof(kArrangeKeys) / sizeof(*kArrangeKeys);
+_Static_assert(sizeof(kArrangeKeys) / sizeof(*kArrangeKeys) == DD_ARRANGE_COUNT, "arrange count mismatch");
+
 static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
 
 @interface WindowManager () {
     EventHotKeyRef _hotkeyRefs[DD_HOTKEY_COUNT];
+    EventHotKeyRef _arrangeRefs[DD_ARRANGE_COUNT];
     EventHandlerRef _handler;
     BOOL _hotkeysOn;
     BOOL _dragOn;
+    NSInteger _activeLayout;
+    AXUIElementRef _mainWindow;
 }
-@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSValue *> *restoreFrames; // pid -> frame
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSValue *> *restoreFrames;
+@property (nonatomic, strong) NSArray<DDManagedWindow *> *restoreSnapshot;
 @property (nonatomic) id dragMon;
 @property (nonatomic) id upMon;
 @property (nonatomic) id downMon;
@@ -156,21 +152,17 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
 
 - (instancetype)init {
     self = [super init];
-    if (self) _restoreFrames = [NSMutableDictionary dictionary];
+    if (self) {
+        _restoreFrames = [NSMutableDictionary dictionary];
+        _activeLayout = -1;
+    }
     return self;
-}
-
-- (BOOL)hasAccessibility { return AXIsProcessTrusted(); }
-
-- (void)requestAccessibility {
-    NSDictionary *opts = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
 }
 
 #pragma mark - Snapping
 
 - (void)snap:(DDSnap)layout {
-    if (![self hasAccessibility]) { [self requestAccessibility]; return; }
+    if (!DDAXTrusted()) { DDAXRequestTrust(); return; }
     pid_t pid = 0;
     AXUIElementRef w = copyFocusedWindow(&pid);
     if (!w) return;
@@ -180,7 +172,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
 
 - (void)applyLayout:(DDSnap)layout toWindow:(AXUIElementRef)w pid:(pid_t)pid {
     CGRect cur;
-    if (!axGetFrame(w, &cur) || cur.size.width < 1) return;
+    if (!DDAXCopyFrame(w, &cur) || cur.size.width < 1) return;
 
     CGRect target;
     if (layout == DDSnapRestore) {
@@ -192,10 +184,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
         CGPoint center = CGPointMake(CGRectGetMidX(cur), CGRectGetMidY(cur));
         CGRect v = visibleFrameCG(screenForCGPoint(center));
         target = rectForLayout(layout, v, cur);
-        // Skip no-ops (already at the target) so a double-trigger — e.g. the menu
-        // shortcut firing alongside the global hot key while the menu is open —
-        // doesn't overwrite the saved frame with the already-snapped one. Otherwise
-        // remember where it was so ⌃⌥Z / "Restore" can undo this snap.
+
         BOOL noop = fabs(cur.origin.x - target.origin.x) < 2 &&
                     fabs(cur.origin.y - target.origin.y) < 2 &&
                     fabs(cur.size.width  - target.size.width)  < 2 &&
@@ -203,7 +192,132 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
         if (noop) return;
         self.restoreFrames[@(pid)] = [NSValue valueWithRect:cur];
     }
-    axSetFrame(w, target);
+    DDAXSetFrame(w, target);
+}
+
+#pragma mark - Arrange (multi-window layouts)
+
+- (void)arrange:(DDArrange)command {
+    if (!DDAXTrusted()) { DDAXRequestTrust(); return; }
+
+    if (command == DDArrangeRestore) {
+        for (DDManagedWindow *m in self.restoreSnapshot) DDAXSetFrame(m.window, m.frame);
+        self.restoreSnapshot = nil;
+        _activeLayout = -1;
+        [self setMainWindow:NULL];
+        return;
+    }
+
+    CGRect v = [self arrangeVisibleFrame];
+    NSArray<DDManagedWindow *> *wins = DDAXManageableWindowsOnScreen(v);
+    if (wins.count == 0) return;
+
+    if (self.restoreSnapshot.count == 0) self.restoreSnapshot = wins;
+
+    DDArrange layout;
+    switch (command) {
+        case DDArrangeCycle:      layout = (_activeLayout == DDArrangeGrid) ? DDArrangeCentered : DDArrangeGrid; break;
+        case DDArrangePromote:    [self setMainWindowToFocusedIn:wins]; layout = DDArrangeCentered; break;
+        case DDArrangeRotateNext: [self rotateMainBy:1 in:wins];  layout = DDArrangeCentered; break;
+        case DDArrangeRotatePrev: [self rotateMainBy:-1 in:wins]; layout = DDArrangeCentered; break;
+        case DDArrangeCentered:   layout = DDArrangeCentered; break;
+        default:                  layout = DDArrangeGrid; break;
+    }
+
+    if (layout == DDArrangeCentered) [self applyCentered:wins inFrame:v];
+    else                             [self applyGrid:wins inFrame:v];
+    _activeLayout = layout;
+}
+
+- (CGRect)arrangeVisibleFrame {
+    CGPoint anchor = cocoaToCG([NSEvent mouseLocation]);
+    AXUIElementRef w = copyFocusedWindow(NULL);
+    if (w) {
+        CGRect f;
+        if (DDAXCopyFrame(w, &f)) anchor = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+        CFRelease(w);
+    }
+    return visibleFrameCG(screenForCGPoint(anchor));
+}
+
+- (void)applyGrid:(NSArray<DDManagedWindow *> *)wins inFrame:(CGRect)v {
+    NSUInteger n = wins.count;
+    if (n == 0) return;
+    if (n == 1) { DDAXSetFrame(wins[0].window, v); return; }
+    if (n == 2) {
+        DDAXSetFrame(wins[0].window, rectForLayout(DDSnapLeftHalf,  v, CGRectZero));
+        DDAXSetFrame(wins[1].window, rectForLayout(DDSnapRightHalf, v, CGRectZero));
+        return;
+    }
+    if (n == 3) {
+        DDAXSetFrame(wins[0].window, rectForLayout(DDSnapLeftHalf,    v, CGRectZero));
+        DDAXSetFrame(wins[1].window, rectForLayout(DDSnapTopRight,    v, CGRectZero));
+        DDAXSetFrame(wins[2].window, rectForLayout(DDSnapBottomRight, v, CGRectZero));
+        return;
+    }
+    const DDSnap quad[4] = { DDSnapTopLeft, DDSnapTopRight, DDSnapBottomLeft, DDSnapBottomRight };
+    for (NSUInteger i = 0; i < n; i++)
+        DDAXSetFrame(wins[i].window, rectForLayout(quad[i % 4], v, CGRectZero));
+}
+
+- (void)applyCentered:(NSArray<DDManagedWindow *> *)wins inFrame:(CGRect)v {
+    DDManagedWindow *main = [self mainWindowIn:wins];
+    [self setMainWindow:main.window];
+    NSMutableArray<DDManagedWindow *> *back = [NSMutableArray array];
+    for (DDManagedWindow *m in wins) if (m != main) [back addObject:m];
+
+    [self applyGrid:back inFrame:v];
+    DDAXSetFrame(main.window, centeredRect(v, kArrangeMainFraction));
+    DDAXRaise(main.window);
+    DDAXActivateApp(main.pid);
+}
+
+- (DDManagedWindow *)mainWindowIn:(NSArray<DDManagedWindow *> *)wins {
+    if (_mainWindow) {
+        for (DDManagedWindow *m in wins)
+            if (CFEqual(m.window, _mainWindow)) return m;
+    }
+    DDManagedWindow *focused = nil;
+    AXUIElementRef w = copyFocusedWindow(NULL);
+    if (w) {
+        for (DDManagedWindow *m in wins)
+            if (CFEqual(m.window, w)) { focused = m; break; }
+        CFRelease(w);
+    }
+    return focused ?: wins.firstObject;
+}
+
+- (void)setMainWindowToFocusedIn:(NSArray<DDManagedWindow *> *)wins {
+    AXUIElementRef w = copyFocusedWindow(NULL);
+    if (!w) return;
+    for (DDManagedWindow *m in wins)
+        if (CFEqual(m.window, w)) { [self setMainWindow:m.window]; break; }
+    CFRelease(w);
+}
+
+- (void)rotateMainBy:(NSInteger)delta in:(NSArray<DDManagedWindow *> *)wins {
+    NSMutableArray<DDManagedWindow *> *order = [NSMutableArray array];
+    for (DDManagedWindow *s in self.restoreSnapshot)
+        for (DDManagedWindow *w in wins)
+            if (CFEqual(s.window, w.window)) { [order addObject:w]; break; }
+    for (DDManagedWindow *w in wins)
+        if (![order containsObject:w]) [order addObject:w];
+
+    NSInteger n = order.count;
+    if (n == 0) return;
+    NSInteger cur = -1;
+    if (_mainWindow)
+        for (NSInteger i = 0; i < n; i++)
+            if (CFEqual(order[i].window, _mainWindow)) { cur = i; break; }
+    NSInteger next = (cur < 0) ? (delta > 0 ? 0 : n - 1) : ((cur + delta + n) % n);
+    [self setMainWindow:order[next].window];
+}
+
+- (void)setMainWindow:(AXUIElementRef)w {
+    if (_mainWindow == w) return;
+    if (w) CFRetain(w);
+    if (_mainWindow) CFRelease(_mainWindow);
+    _mainWindow = w;
 }
 
 #pragma mark - Global hotkeys (Carbon)
@@ -223,15 +337,26 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
             RegisterEventHotKey(kHotkeys[i].key, mods, hkid,
                                 GetApplicationEventTarget(), 0, &_hotkeyRefs[i]);
         }
+        UInt32 amods = controlKey | optionKey | shiftKey;
+        for (size_t i = 0; i < kArrangeCount; i++) {
+            EventHotKeyID hkid = { .signature = 'DDwm', .id = (UInt32)(kHotkeyCount + i) };
+            RegisterEventHotKey(kArrangeKeys[i].key, amods, hkid,
+                                GetApplicationEventTarget(), 0, &_arrangeRefs[i]);
+        }
     } else {
         for (size_t i = 0; i < kHotkeyCount; i++) {
             if (_hotkeyRefs[i]) { UnregisterEventHotKey(_hotkeyRefs[i]); _hotkeyRefs[i] = NULL; }
+        }
+        for (size_t i = 0; i < kArrangeCount; i++) {
+            if (_arrangeRefs[i]) { UnregisterEventHotKey(_arrangeRefs[i]); _arrangeRefs[i] = NULL; }
         }
     }
 }
 
 - (void)fireHotkeyIndex:(UInt32)i {
-    if (i < kHotkeyCount) [self snap:kHotkeys[i].layout];
+    if (i < kHotkeyCount) { [self snap:kHotkeys[i].layout]; return; }
+    UInt32 j = i - (UInt32)kHotkeyCount;
+    if (j < kArrangeCount) [self arrange:kArrangeKeys[j].cmd];
 }
 
 #pragma mark - Snap on drag
@@ -256,17 +381,15 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
     }
 }
 
-// Arm only when the press lands in the focused window's titlebar band — avoids
-// snapping on text selection or content drags.
 - (void)onMouseDown {
     self.dragging = NO;
     self.hasPending = NO;
-    if (![self hasAccessibility]) return;
+    if (!DDAXTrusted()) return;
     pid_t pid = 0;
     AXUIElementRef w = copyFocusedWindow(&pid);
     if (!w) return;
     CGRect f;
-    if (axGetFrame(w, &f)) {
+    if (DDAXCopyFrame(w, &f)) {
         CGPoint m = cocoaToCG([NSEvent mouseLocation]);
         CGRect titlebar = CGRectMake(f.origin.x, f.origin.y, f.size.width, 32);
         if (CGRectContainsPoint(titlebar, m)) { self.dragging = YES; self.dragPid = pid; }
@@ -309,7 +432,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef next, EventRef e, void *ud);
     self.hasPending = NO;
     [self hidePreview];
     if (!act) return;
-    // Apply to the window that was being dragged.
+
     AXUIElementRef w = copyFocusedWindow(NULL);
     if (w) { [self applyLayout:layout toWindow:w pid:pid]; CFRelease(w); }
 }
