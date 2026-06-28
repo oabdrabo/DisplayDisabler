@@ -1388,11 +1388,16 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
         return;
     }
 
-    if ([self pref:kConfirmDisable] &&
-        ![self confirmDestructive:[NSString stringWithFormat:@"Disable \"%@\"?", name]
-                             info:@"You can re-enable it from this menu."
-                       actionName:@"Disable"]) {
-        return;
+    BOOL strandRisk = CGDisplayIsBuiltin(did) && [self.displayManager hasExternalDisplay];
+    if (strandRisk || [self pref:kConfirmDisable]) {
+        NSString *info = strandRisk
+            ? @"While an external display is connected, macOS can only re-enable the built-in after you log out and back in — there is no in-app way to undo it."
+            : @"You can re-enable it from this menu.";
+        if (![self confirmDestructive:[NSString stringWithFormat:@"Disable “%@”?", name]
+                                 info:info
+                           actionName:@"Disable"]) {
+            return;
+        }
     }
 
     NSError *error = nil;
@@ -1415,8 +1420,13 @@ static NSAttributedString *ddColumns(NSArray<NSString *> *cols, NSArray<NSNumber
                           body:[NSString stringWithFormat:@"%@ has been enabled.", name]];
     } else {
         NSLog(@"DisplayDeck: Failed to enable 0x%X: %@", did, error);
-        [self postNotification:@"Enable Failed"
-                          body:error.localizedDescription];
+        [NSApp activate];
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"Couldn’t re-enable “%@”", name];
+        alert.informativeText = @"macOS won’t re-enable a display that was turned off while another display is connected. Log out and back in (Apple menu → Log Out) to restore it.";
+        alert.alertStyle = NSAlertStyleWarning;
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
     }
 }
 

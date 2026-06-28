@@ -2,6 +2,12 @@
 
 All notable changes to DisplayDeck are documented here. Format follows [Keep a Changelog](https://keepachangelog.com); versions follow [SemVer](https://semver.org).
 
+## [2.8.1] - 2026-06-20
+
+### Fixed
+- **Re-enabling the built-in no longer fails silently.** Disabling the built-in while an external display is connected leaves macOS unable to re-enable it from the app - the panel drops off the configurable display list, so the re-enable call comes back `kCGErrorIllegalArgument` and nothing happened. "Enable" now explains this with a dialog (log out and back in to restore the built-in) instead of doing nothing.
+- **Disabling the built-in now warns first.** When an external is attached, disabling the built-in pops a warning that re-enabling it will require logging out, so you are not caught off guard.
+
 ## [2.8.0] - 2026-06-20
 
 ### Added
